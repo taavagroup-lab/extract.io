@@ -11,7 +11,7 @@ function ItemList({ items }: { items: ItemAmount[] }) {
         const def = getItemDef(i.itemId);
         return (
           <li key={i.itemId}>
-            <ItemIcon type={def.type} rarity={def.rarity} size={30} />
+            <ItemIcon type={def.type} rarity={def.rarity} icon={def.icon} size={30} />
             <span>{def.name}</span>
             <small>×{i.qty}</small>
             <b>{formatCents(def.estimatedValue * i.qty)}</b>

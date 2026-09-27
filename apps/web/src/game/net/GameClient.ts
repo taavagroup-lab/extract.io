@@ -131,7 +131,7 @@ export interface HudState {
   hurtAt: number;
 }
 
-export type FxEvent = Extract<GameEvent, { e: 'dmg' } | { e: 'hurt' } | { e: 'extractAlert' }>;
+export type FxEvent = Extract<GameEvent, { e: 'dmg' } | { e: 'hurt' } | { e: 'extractAlert' } | { e: 'kill' }>;
 
 const DT = 1 / NETWORK_CONFIG.tickRate;
 const DT_MS = 1000 / NETWORK_CONFIG.tickRate;
@@ -140,6 +140,11 @@ const RECONNECT_ATTEMPT_MS = 1500;
 const RECONNECT_GIVE_UP_MS = NETWORK_CONFIG.reconnectWindowMs - 2000;
 
 function gameServerUrl(): string {
+  // Dev only: `?gs=ws://localhost:3102/ws` targets another game server (e.g. a bot-free sandbox).
+  if (import.meta.env.DEV) {
+    const override = new URLSearchParams(window.location.search).get('gs');
+    if (override && /^wss?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(override)) return override;
+  }
   const env = import.meta.env.VITE_GAME_SERVER_URL as string | undefined;
   if (env) return env;
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -173,6 +178,10 @@ export class GameClient {
   private dashQueued = false;
   private smoothX = 0;
   private smoothY = 0;
+  /** Position before the last fixed step: rendering interpolates prev -> predicted. */
+  private prevX = 0;
+  private prevY = 0;
+  private alpha = 1;
   aim = 0;
 
   // Replicated state
@@ -375,12 +384,15 @@ export class GameClient {
     return this.timeOffset === null ? 0 : performance.now() + this.timeOffset;
   }
 
-  /** Self position to render (prediction + decaying correction offset). */
+  /**
+   * Self position to render: interpolated between the last two fixed 30 Hz
+   * steps (smooth on 60/144 Hz displays) plus the decaying correction offset.
+   */
   get renderX(): number {
-    return this.predicted.x + this.smoothX;
+    return lerp(this.prevX, this.predicted.x, this.alpha) + this.smoothX;
   }
   get renderY(): number {
-    return this.predicted.y + this.smoothY;
+    return lerp(this.prevY, this.predicted.y, this.alpha) + this.smoothY;
   }
 
   update(frameMs: number, input: InputSample): void {
@@ -389,6 +401,8 @@ export class GameClient {
     const out: InputCmd[] = [];
     while (this.accumulator >= DT_MS) {
       this.accumulator -= DT_MS;
+      this.prevX = this.predicted.x;
+      this.prevY = this.predicted.y;
       if (!this.canPredict) {
         this.dashQueued = false;
         continue;
@@ -408,6 +422,7 @@ export class GameClient {
       this.send({ t: 'input', i: out.slice(i, i + NETWORK_CONFIG.input.maxBatch) });
     }
     if (this.pending.length > 90) this.pending.splice(0, this.pending.length - 90);
+    this.alpha = this.accumulator / DT_MS;
 
     const decay = Math.exp(-frameMs / 60);
     this.smoothX *= decay;
@@ -611,6 +626,8 @@ export class GameClient {
         dashDirX: self.dashDirX,
         dashDirY: self.dashDirY,
       });
+      this.prevX = self.x;
+      this.prevY = self.y;
       this.pending = this.pending.filter((i) => i.s > ack);
       this.predictionReady = true;
       return;
@@ -634,9 +651,14 @@ export class GameClient {
       // Teleport-sized correction (dev teleport / respawn): snap.
       this.smoothX = 0;
       this.smoothY = 0;
+      this.prevX = corrected.x;
+      this.prevY = corrected.y;
     } else {
+      // Shift the whole interpolation segment and absorb the jump in the smoothing offset.
       this.smoothX += ex;
       this.smoothY += ey;
+      this.prevX -= ex;
+      this.prevY -= ey;
     }
     Object.assign(this.predicted, corrected);
   }
@@ -699,6 +721,7 @@ export class GameClient {
             mine: ev.killerId === this.playerId || ev.victimId === this.playerId,
           },
         ];
+        this.fx.push(ev);
         break;
       case 'announce':
         this.announcements = [...this.announcements.slice(-2), { id: this.uid++, at: now, text: ev.text, sub: ev.sub, kind: ev.kind }];

@@ -9,7 +9,7 @@ import { DeathScreen, ExtractedScreen, MatchEndScreen } from '../game/hud/Result
 import { useHud } from '../game/hud/useHud';
 import { InputController } from '../game/input/InputController';
 import { GameClient } from '../game/net/GameClient';
-import { PhaserGame } from '../game/PhaserGame';
+import { ThreeView } from '../game/ThreeView';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { session } from '../lib/session';
@@ -52,7 +52,7 @@ function GameView({ client, onPlayAgain }: { client: GameClient; onPlayAgain: ()
 
   return (
     <div className="game">
-      <PhaserGame client={client} controls={controls} />
+      <ThreeView client={client} controls={controls} />
       {!finished && <Hud client={client} hud={hud} />}
       {!finished && overlay === 'inventory' && <InventoryOverlay client={client} hud={hud} onClose={() => setOverlay('none')} />}
       {!finished && overlay === 'map' && <MapOverlay client={client} onClose={() => setOverlay('none')} />}

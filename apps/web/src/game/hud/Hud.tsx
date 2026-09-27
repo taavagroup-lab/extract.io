@@ -157,7 +157,7 @@ export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
           const cfg = RARITY_CONFIG[def.rarity];
           return (
             <div key={t.id} className="hud-toast" style={{ borderColor: cfg.color, boxShadow: `0 0 28px ${cfg.color}44` }}>
-              <ItemIcon type={def.type} rarity={def.rarity} size={42} />
+              <ItemIcon type={def.type} rarity={def.rarity} icon={def.icon} size={42} />
               <div>
                 <span style={{ color: cfg.color }}>{cfg.label.toUpperCase()} ITEM</span>
                 <strong>{def.name.toUpperCase()}{t.qty > 1 ? ` ×${t.qty}` : ''}</strong>

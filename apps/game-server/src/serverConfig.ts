@@ -8,6 +8,8 @@ export interface ServerConfig {
   allowAnonymous: boolean;
   targetPlayers: number;
   fillWithBots: boolean;
+  /** Humans needed to start when bots are disabled. */
+  minHumans: number;
   lobbyWaitMs: number;
   jwtSecret: string;
   databaseUrl: string | null;
@@ -25,6 +27,7 @@ export function loadServerConfig(): ServerConfig {
     allowAnonymous: !production && envBool('ALLOW_ANONYMOUS_PLAY', true),
     targetPlayers: Math.max(1, Math.min(MATCH_CONFIG.maxPlayers, target)),
     fillWithBots: envBool('MATCH_FILL_WITH_BOTS', true),
+    minHumans: Math.max(1, envInt('MATCH_MIN_HUMANS', 2)),
     lobbyWaitMs: envInt('LOBBY_WAIT_SECONDS', MATCH_CONFIG.lobbyWaitMs / 1000) * 1000,
     jwtSecret: requireJwtSecret(),
     databaseUrl: process.env.DATABASE_URL ? envStr('DATABASE_URL') : null,

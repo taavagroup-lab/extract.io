@@ -172,8 +172,25 @@ kbd {
 
 /* ---------------------------------------------------------------- game + HUD */
 .game { position: absolute; inset: 0; overflow: hidden; }
-.game-canvas { position: absolute; inset: 0; cursor: crosshair; }
+.game-canvas { position: absolute; inset: 0; cursor: crosshair; overflow: hidden; }
 .game-canvas canvas { display: block; }
+.game-canvas::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, #00000073 100%); }
+.world-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; font-family: var(--font-display); }
+.world-labels > div { position: absolute; left: 0; top: 0; will-change: transform; white-space: nowrap; }
+.lbl-player { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.lbl-name { font-family: var(--font-body); font-size: 12px; font-weight: 600; color: #f1f5f9; text-shadow: 0 1px 3px #000, 0 0 2px #000; }
+.lbl-player.is-bot .lbl-name { color: #cbd5e1; }
+.lbl-tag { font-size: 10px; letter-spacing: 0.14em; color: #fecaca; background: #7f1d1dcc; border: 1px solid #ef4444; padding: 0 5px; border-radius: 3px; }
+.lbl-bars { position: relative; width: 46px; height: 7px; background: #000000b3; border-radius: 2px; overflow: hidden; box-shadow: 0 0 0 1px #00000080; }
+.lbl-hp { position: absolute; left: 0; top: 0; height: 5px; background: linear-gradient(90deg, #22c55e, #86efac); transition: width 120ms; }
+.lbl-hp.is-low { background: linear-gradient(90deg, #dc2626, #f87171); }
+.lbl-armor { position: absolute; left: 0; bottom: 0; height: 2px; background: #38bdf8; }
+.lbl-dmg { font-family: var(--font-mono); font-weight: 700; font-size: 20px; color: #fde047; text-shadow: 0 2px 0 #000, 0 0 6px #000; }
+.lbl-dmg.is-armor { color: #7dd3fc; }
+.lbl-dmg.is-big { font-size: 26px; color: #fb923c; }
+.lbl-zone { font-size: 15px; font-weight: 700; letter-spacing: 0.16em; color: #6ee7b7; text-shadow: 0 0 10px #10b98199, 0 2px 3px #000; }
+.lbl-zone.is-busy { color: #fdba74; text-shadow: 0 0 10px #f9731699, 0 2px 3px #000; }
+.lbl-zone.is-supply { color: #fdba74; text-shadow: 0 0 10px #f9731699, 0 2px 3px #000; }
 .hud { position: absolute; inset: 0; pointer-events: none; font-family: var(--font-display); user-select: none; }
 .hud > * { pointer-events: none; }
 .hud-vignette { position: absolute; inset: 0; box-shadow: inset 0 0 160px 40px #ef444400; transition: box-shadow 250ms; }

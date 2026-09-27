@@ -82,7 +82,7 @@ function BuyModal({ listing, onClose, onDone }: { listing: ListingDTO; onClose: 
     <Modal title="Confirm purchase" onClose={onClose}>
       <div className="modal-body">
         <div className="item-cell">
-          <ItemIcon type={getItemDef(listing.itemId).type} rarity={listing.rarity} size={40} />
+          <ItemIcon type={getItemDef(listing.itemId).type} rarity={listing.rarity} icon={listing.icon} size={40} />
           <div>
             <strong>
               {listing.name}
@@ -174,7 +174,7 @@ function Browse({ onNotice }: { onNotice: (m: string) => void }) {
             return (
               <article key={l.id} className={`listing rarity-${l.rarity.toLowerCase()}`}>
                 <div className="listing__top">
-                  <ItemIcon type={getItemDef(l.itemId).type} rarity={l.rarity} size={44} />
+                  <ItemIcon type={getItemDef(l.itemId).type} rarity={l.rarity} icon={l.icon} size={44} />
                   <RarityBadge rarity={l.rarity} />
                 </div>
                 <h3>

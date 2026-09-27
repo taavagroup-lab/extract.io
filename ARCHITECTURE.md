@@ -109,10 +109,17 @@ Game-Logic importiert kein Chain-SDK. Die API nutzt `BlockchainProvider` (`conne
 - `AnalyticsBus` mit Sinks (Log, Memory) und Events `GAME_STARTED, MATCH_STARTED, MATCH_ENDED, PLAYER_DIED, PLAYER_EXTRACTED, ITEM_FOUND, ITEM_SOLD, ITEM_BOUGHT`. Ein externer Anbieter ist nur ein weiterer Sink.
 
 ## Client
-- React für Menüs/HUD/Overlays, Phaser 3 nur fürs Rendering (`GameScene` enthält keine Spielregeln).
+- React für Menüs/HUD/Overlays, **Three.js** fürs Rendering (`render3d/`, enthält keine Spielregeln). Ursprünglich Phaser 3 (2D); für den gewünschten „3D von oben“-Look ersetzt – Simulation, Netzwerk und HUD blieben unverändert, weil der Renderer nur den `GameClient` liest.
+- **Kamera:** Perspektive, 15° geneigt, folgt weich mit leichtem Vorausblick zum Fadenkreuz. Sichtbare Fläche bleibt ≤ 1600×1000 Einheiten (fair, egal wie groß der Monitor ist). Zielen per Raycast auf die Waffenhöhe.
+- **Welt** (`MapBuilder3D`): Bodenflächen mit prozeduralen, welt-verankerten Kacheltexturen (Gras, Waldboden, Asphalt, Beton, Planken, Fliesen, Metall), Wände/Container/Maschinen als Boxen mit echter Höhe, pro Material zu einem Mesh gemerged; Bäume/Felsen als `InstancedMesh`. Baumkronen blenden per Shader-Injection rund um den eigenen Spieler aus.
+- **Licht:** Hemisphere + Sonne mit Schatten (Shadow-Kamera folgt der Sicht, auf Texel gesnappt), PBR-Umgebung (`RoomEnvironment`), ACES-Tonemapping, Bloom (nur HDR-Emissives: Visiere, Lichtsäulen, Leuchtspuren).
+- **Modelle:** Charaktere mit Skins (`skins.ts`, deterministisch pro Name), Outline, Laufzyklus, Rückstoß, Mündungsblitz, Treffer-Flash; Waffen pro Typ mit Rarity-Akzent; jedes Item mit eigenem 3D-Modell, Glow und ab Epic einer Lichtsäule; Kisten mit animiertem Deckel; Supply Drops fallen am Fallschirm.
+- **Effekte:** Leuchtspuren als instanziertes Mesh, gepoolte Funken-Sprites, Extraction-Zonen mit Lichtsäule und Partikeln.
+- **Labels** (Namen, HP, Schadenszahlen, Zonen) sind DOM-Elemente, die jedes Frame auf Weltpositionen projiziert werden – gestochen scharf.
+- **Flüssigkeit:** Der eigene Spieler wird zwischen den 30-Hz-Simulationsschritten interpoliert (bei 60/144 Hz kein Treppeneffekt); Korrekturen aus der Reconciliation verschieben das Interpolationssegment und klingen weich aus. Automatische Qualitätsstufe (Bloom/Auflösung/Schatten) bei dauerhaft langsamen Frames.
 - `GameClient` = Netzwerk + Prediction + Interpolation, framework-agnostisch; React liest einen gedrosselten HUD-Snapshot (10 Hz) über `useSyncExternalStore`.
-- Placeholder-Grafik: generierte Texturen (Rarity-Rahmen + Typ-Glyphe, Kisten) und Vektor-Shapes, alles zentral in `render/palette.ts` + `render/textures.ts` austauschbar.
-- Phaser wird per Code-Splitting erst beim Spielstart geladen.
+- Alle Assets sind prozedural erzeugt (keine Dateien) und über `textures.ts`, `style.ts`, `skins.ts` und die Modell-Factories austauschbar.
+- Die 3D-Engine wird per Code-Splitting erst beim Spielstart geladen.
 
 ## Skalierung Richtung 100 Spieler / mehrere Server
 Bereits vorhanden: Interest Management, Delta-Replikation, Spatial Hashing, Projektil-Broadphase über Grid, Nav-Grid einmal pro Map geteilt, Object-Reuse in Hot-Paths, Room-Isolation.

@@ -52,6 +52,8 @@ export interface MatchRoomOptions {
   persistence: GamePersistence;
   targetPlayers: number;
   fillWithBots: boolean;
+  /** Humans required to start when bots are disabled (default 2). */
+  minHumans?: number;
   lobbyWaitMs: number;
   devTools: boolean;
   seasonId: string | null;
@@ -363,7 +365,7 @@ export class MatchRoom {
       const elapsed = this.now - this.lobbyStartedAt;
       const full = humans >= this.opts.targetPlayers;
       const waited = elapsed >= this.opts.lobbyWaitMs;
-      if (full || (waited && (this.opts.fillWithBots || humans >= 2))) this.sm.beginCountdown(this.now);
+      if (full || (waited && (this.opts.fillWithBots || humans >= (this.opts.minHumans ?? 2)))) this.sm.beginCountdown(this.now);
     }
     if (this.now - this.lastLobbySent >= 200) {
       this.lastLobbySent = this.now;

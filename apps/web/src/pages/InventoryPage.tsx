@@ -134,7 +134,7 @@ export function InventoryPage() {
                   <tr key={i.id} className={i.status === 'LISTED' ? 'is-muted' : ''}>
                     <td>
                       <div className="item-cell">
-                        <ItemIcon type={i.type} rarity={i.rarity} size={32} />
+                        <ItemIcon type={i.type} rarity={i.rarity} icon={i.icon} size={32} />
                         <div>
                           <strong>{i.name}</strong>
                           {i.serialNumber !== null && (

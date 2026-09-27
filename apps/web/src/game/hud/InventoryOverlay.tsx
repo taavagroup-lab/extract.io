@@ -13,7 +13,7 @@ function Slot({ stack, selected, onClick, label }: { stack: ItemStack | null; se
     <button className={`inv-slot ${selected ? 'is-selected' : ''} ${stack ? '' : 'is-empty'}`} onClick={onClick} disabled={!stack}>
       {def && stack ? (
         <>
-          <ItemIcon type={def.type} rarity={def.rarity} size={34} />
+          <ItemIcon type={def.type} rarity={def.rarity} icon={def.icon} size={34} />
           {stack.qty > 1 && <span className="inv-slot__qty">{stack.qty}</span>}
         </>
       ) : (
@@ -90,7 +90,7 @@ export function InventoryOverlay({ client, hud, onClose }: { client: GameClient;
               {def ? (
                 <>
                   <div className="inv-detail__head">
-                    <ItemIcon type={def.type} rarity={def.rarity} size={44} />
+                    <ItemIcon type={def.type} rarity={def.rarity} icon={def.icon} size={44} />
                     <div>
                       <strong>{def.name}</strong>
                       <RarityBadge rarity={def.rarity} />

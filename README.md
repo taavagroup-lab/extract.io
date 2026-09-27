@@ -4,7 +4,7 @@
 
 Browser-Multiplayer-Extraction-Shooter (Top-Down 2D): Loot sammeln, andere Spieler bekämpfen, rechtzeitig extrahieren. Extrahierter Loot landet im persistenten Account-Inventar und kann auf einem internen Marketplace (TEST USDC) gehandelt werden.
 
-- **Client:** React + Vite + Phaser 3 (Client-Prediction, Server-Reconciliation, Interpolation)
+- **Client:** React + Vite + Three.js – 3D von oben (leicht geneigte Kamera), Echtzeit-Schatten, Bloom; Client-Prediction, Server-Reconciliation, Interpolation
 - **Game Server:** Node.js + TypeScript + `ws`, server-autoritativ, 30 Ticks/s, Interest Management, Delta-Updates
 - **API:** Fastify + Prisma + PostgreSQL (Guest-Login, Inventar, Marketplace, Leaderboards, Seasons, Wallet)
 - **Monorepo:** pnpm Workspaces
@@ -63,7 +63,8 @@ pnpm install
 | `CORS_ORIGIN` | `http://localhost:5173` | kommagetrennte Origins |
 | `GAME_SERVER_PORT` / `GAME_SERVER_URL` | `3002` / `ws://localhost:3002/ws` | Game Server |
 | `MATCH_TARGET_PLAYERS` | `20` | Spieler pro Match (Menschen + Bots), max. 100 |
-| `MATCH_FILL_WITH_BOTS` | `true` | Lobby mit Bots auffüllen; `false` = Start ab 2 Menschen |
+| `MATCH_FILL_WITH_BOTS` | `true` | Lobby mit Bots auffüllen; `false` = Start ab `MATCH_MIN_HUMANS` Menschen |
+| `MATCH_MIN_HUMANS` | `2` | Menschen für den Start ohne Bots (`1` = Solo-Sandbox) |
 | `LOBBY_WAIT_SECONDS` | `8` | Wartezeit auf Menschen, bevor Bots auffüllen |
 | `DEV_TOOLS` | `true` | Dev-Panel + `/dev/*`-Endpoints (in Production immer aus) |
 | `ALLOW_ANONYMOUS_PLAY` | `true` | WebSocket-Join ohne Account (Load-Tests; in Production immer aus) |
@@ -140,6 +141,16 @@ Zwei Tabs im **selben** Browser teilen sich sonst die Session. Deshalb gibt es S
 
 Um nicht 7 Minuten auf die Extraction-Phase zu warten: Dev-Panel (`` ` ``) → **→ 06:57** oder **Activate extraction**, dann **→ Rooftop Heli** o. ä.
 
+### Solo-Sandbox ohne Bots (Grafik / Features in Ruhe testen)
+
+Zweiten Game Server ohne Bots starten und den Client per `?gs=` darauf zeigen lassen (nur im Dev-Modus):
+
+```bash
+cd apps/game-server
+GAME_SERVER_PORT=3102 MATCH_FILL_WITH_BOTS=false MATCH_MIN_HUMANS=1 LOBBY_WAIT_SECONDS=2 npx tsx src/index.ts
+```
+Dann http://localhost:5173/?gs=ws://localhost:3102/ws öffnen. Im Dev-Modus gibt es außerdem `window.__extractRenderer.zoom(0.3)` in der Browser-Konsole, um Modelle aus der Nähe anzusehen.
+
 ## Spawn Bots
 
 ```bash
@@ -194,7 +205,7 @@ NODE_ENV=production pnpm start   # startet API + Game Server aus dist/
 
 ```
 apps/
-  web/            React + Phaser Client (Menü, HUD, Inventar, Marketplace, Leaderboard, Profil)
+  web/            React + Three.js Client (3D-Welt, HUD, Inventar, Marketplace, Leaderboard, Profil)
   game-server/    Autoritativer Match-Server (Rooms, Systeme, Bots, Netzwerk, Persistenz-Port)
   api/            REST API (Auth, Inventar, Marketplace, Leaderboard, Season, Wallet)
 packages/

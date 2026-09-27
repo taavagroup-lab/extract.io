@@ -112,6 +112,7 @@ export class MatchManager implements ConnectionHandler {
       persistence,
       targetPlayers: config.targetPlayers,
       fillWithBots: config.fillWithBots,
+      minHumans: config.minHumans,
       lobbyWaitMs: config.lobbyWaitMs,
       devTools: config.devTools,
       seasonId: config.seasonId,
