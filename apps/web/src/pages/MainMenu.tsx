@@ -1,6 +1,6 @@
 import { CURRENT_SEASON } from '@extract/game-config';
 import { Button, Money } from '@extract/ui';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { session } from '../lib/session';
@@ -61,6 +61,24 @@ function EntryForm() {
   );
 }
 
+/** Live 3D flight over the map behind the menu (lazy-loaded, skipped for reduced motion). */
+function Backdrop() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    let backdrop: { dispose(): void } | null = null;
+    let cancelled = false;
+    void import('../game/render3d/MenuBackdrop').then(({ MenuBackdrop }) => {
+      if (!cancelled && ref.current) backdrop = new MenuBackdrop(ref.current);
+    });
+    return () => {
+      cancelled = true;
+      backdrop?.dispose();
+    };
+  }, []);
+  return <div ref={ref} className="menu-3d" aria-hidden="true" />;
+}
+
 export function MainMenu() {
   const { user, token } = useStore(session);
 
@@ -70,6 +88,7 @@ export function MainMenu() {
 
   return (
     <div className="menu">
+      <Backdrop />
       <div className="menu-bg" aria-hidden="true" />
       <header className="menu-top">
         {user && (

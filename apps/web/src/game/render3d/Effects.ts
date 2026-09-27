@@ -8,7 +8,7 @@ import { COLORS, GUN_HEIGHT } from './style';
 import { Textures } from './textures';
 
 const MAX_TRACERS = 600;
-const MAX_SPARKS = 160;
+const MAX_SPARKS = 280;
 const TRACER_LEN = 36;
 const DROP_HEIGHT = 1500;
 
@@ -53,7 +53,8 @@ export class Effects {
   private readonly c = new THREE.Color();
   private readonly up = new THREE.Vector3(0, 1, 0);
 
-  constructor(private readonly onFire: (ownerId: number) => void) {
+  /** onFire: a remote player's shot appeared (not our own: those are predicted). */
+  constructor(private readonly onFire: (ownerId: number, weaponIndex: number, x: number, y: number) => void) {
     this.tracers = new THREE.InstancedMesh(
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
@@ -86,6 +87,16 @@ export class Effects {
     [sp.vx, sp.vy, sp.vz] = velocity ?? [0, 0, 0];
   }
 
+  /** Small dust puff at a character's feet (running). */
+  dust(x: number, z: number): void {
+    this.spark(x + (Math.random() - 0.5) * 14, 4, z + (Math.random() - 0.5) * 14, 0x6b6257, 14 + Math.random() * 6, 420, [(Math.random() - 0.5) * 30, 25, (Math.random() - 0.5) * 30]);
+  }
+
+  /** Glowing streak left behind while dashing. */
+  trail(x: number, z: number, color: number): void {
+    this.spark(x, 22, z, color, 30, 260);
+  }
+
   deathBurst(x: number, z: number): void {
     for (let i = 0; i < 18; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -110,18 +121,20 @@ export class Effects {
       const weapon = weaponFromIndex(b.weapon);
       if (!this.seenBullets.has(b.id)) {
         this.seenBullets.add(b.id);
-        this.onFire(b.ownerId);
-        this.spark(b.x0 + b.dx * 44, GUN_HEIGHT + 2, b.y0 + b.dy * 44, 0xffd27a, 26, 70);
+        if (!b.local && !b.ghost) this.onFire(b.ownerId, b.weapon, b.x0, b.y0);
+        if (!b.ghost) this.spark(b.x0 + b.dx * 50, GUN_HEIGHT + 2, b.y0 + b.dy * 50, 0xffd27a, 28, 70);
       }
       const end = b.endDist ?? b.maxDist;
       const dist = ((now - b.born) / 1000) * b.speed + 30;
       if (dist >= end) {
         const hx = b.x0 + b.dx * end;
         const hz = b.y0 + b.dy * end;
+        // Ghosts (server copies of our own shots) only confirm player hits;
+        // the predicted tracer already showed the wall impact.
         if (b.hitPlayer) {
           this.spark(hx, GUN_HEIGHT, hz, COLORS.danger, 26, 200);
           for (let k = 0; k < 4; k++) this.spark(hx, GUN_HEIGHT, hz, 0xff8080, 6, 260, [(Math.random() - 0.5) * 200, 80 + Math.random() * 80, (Math.random() - 0.5) * 200]);
-        } else {
+        } else if (!b.ghost) {
           this.spark(hx, GUN_HEIGHT, hz, 0xfff1c4, 14, 130);
           for (let k = 0; k < 3; k++) this.spark(hx, GUN_HEIGHT, hz, 0xffd27a, 4, 220, [(Math.random() - 0.5) * 160, 60 + Math.random() * 100, (Math.random() - 0.5) * 160]);
         }
@@ -129,7 +142,7 @@ export class Effects {
         this.seenBullets.delete(b.id);
         continue;
       }
-      if (n >= MAX_TRACERS) continue;
+      if (n >= MAX_TRACERS || b.ghost) continue;
       const head = Math.min(dist, end);
       const tail = Math.max(30, head - TRACER_LEN);
       const mid = (head + tail) / 2;

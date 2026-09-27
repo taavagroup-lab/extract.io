@@ -1,6 +1,7 @@
 import { Button } from '@extract/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { DevPanel } from '../game/hud/DevPanel';
+import { GameMenu } from '../game/hud/GameMenu';
 import { Hud } from '../game/hud/Hud';
 import { InventoryOverlay } from '../game/hud/InventoryOverlay';
 import { MapOverlay } from '../game/hud/MapViews';
@@ -15,7 +16,7 @@ import { navigate } from '../lib/router';
 import { session } from '../lib/session';
 import { useStore } from '../lib/store';
 
-type Overlay = 'none' | 'inventory' | 'map';
+type Overlay = 'none' | 'inventory' | 'map' | 'menu';
 
 function GameView({ client, onPlayAgain }: { client: GameClient; onPlayAgain: () => void }) {
   const hud = useHud(client);
@@ -28,12 +29,12 @@ function GameView({ client, onPlayAgain }: { client: GameClient; onPlayAgain: ()
         toggleInventory: () => setOverlay((o) => (o === 'inventory' ? 'none' : 'inventory')),
         toggleMap: () => setOverlay((o) => (o === 'map' ? 'none' : 'map')),
         toggleDev: () => setDev((d) => !d),
-        closeOverlays: () => setOverlay('none'),
+        escape: () => setOverlay((o) => (o === 'none' ? 'menu' : 'none')),
       }),
     [client],
   );
   useEffect(() => () => controls.dispose(), [controls]);
-  controls.blocked = overlay === 'inventory' || hud.status !== 'playing';
+  controls.blocked = overlay === 'inventory' || overlay === 'menu' || hud.status !== 'playing';
 
   const finished = hud.status === 'dead' || hud.status === 'extracted' || hud.status === 'ended';
   useEffect(() => {
@@ -56,6 +57,16 @@ function GameView({ client, onPlayAgain }: { client: GameClient; onPlayAgain: ()
       {!finished && <Hud client={client} hud={hud} />}
       {!finished && overlay === 'inventory' && <InventoryOverlay client={client} hud={hud} onClose={() => setOverlay('none')} />}
       {!finished && overlay === 'map' && <MapOverlay client={client} onClose={() => setOverlay('none')} />}
+      {!finished && overlay === 'menu' && (
+        <GameMenu
+          onResume={() => setOverlay('none')}
+          onLeave={() => {
+            client.leave();
+            navigate('menu');
+          }}
+        />
+      )}
+      {!finished && overlay === 'none' && <button className="menu-fab" onClick={() => setOverlay('menu')} aria-label="Menu">ESC</button>}
       {!finished && dev && hud.devTools && <DevPanel client={client} onClose={() => setDev(false)} />}
       {hud.status === 'reconnecting' && <div className="reconnecting">CONNECTION LOST · RECONNECTING…</div>}
       {hud.status === 'dead' && hud.death && <DeathScreen d={hud.death} {...actions} />}

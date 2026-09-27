@@ -62,6 +62,8 @@ export class CharacterModel {
   private recoil = 0;
   private flashT = 0;
   private hitT = 0;
+  /** Smoothed ground speed (units/s), derived from rendered movement. */
+  speed = 0;
 
   constructor(
     readonly skin: CharacterSkin,
@@ -164,7 +166,9 @@ export class CharacterModel {
     const moved = Number.isNaN(this.lastX) ? 0 : Math.hypot(x - this.lastX, y - this.lastY);
     this.lastX = x;
     this.lastY = y;
-    const speed = dt > 0 ? moved / dt : 0;
+    const instant = dt > 0 && moved < 60 ? moved / dt : 0;
+    this.speed += (instant - this.speed) * Math.min(1, dt * 12);
+    const speed = this.speed;
     if (speed > 20 && moved < 60) this.phase += moved * 0.11;
     const stride = speed > 20 ? 7 : 0;
     const s = Math.sin(this.phase);

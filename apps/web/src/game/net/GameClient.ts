@@ -1,4 +1,4 @@
-import { NETWORK_CONFIG, PLAYER_CONFIG, getItemDef } from '@extract/game-config';
+import { NETWORK_CONFIG, PLAYER_CONFIG, WEAPONS, getItemDef, weaponIndex } from '@extract/game-config';
 import {
   INPUT_BUTTONS,
   PLAYER_STATUSES,
@@ -23,8 +23,9 @@ import {
   type SelfState,
   type ServerMessage,
   type SnapshotMessage,
+  type WeaponId,
 } from '@extract/game-types';
-import { CollisionWorld, decodeMessage, encodeMessage, lerp, lerpAngle, stepMovement, type MoveState } from '@extract/shared';
+import { CollisionWorld, decodeMessage, encodeMessage, lerp, lerpAngle, segmentCircle, stepMovement, type MoveState } from '@extract/shared';
 
 export type ClientStatus = 'connecting' | 'lobby' | 'playing' | 'dead' | 'extracted' | 'ended' | 'reconnecting' | 'error';
 
@@ -66,6 +67,10 @@ export interface ClientBullet {
   /** Distance travelled when the server reported the end (hit). */
   endDist: number | null;
   hitPlayer: boolean;
+  /** Predicted locally the moment we fired (instant feedback). */
+  local: boolean;
+  /** Server copy of one of our own shots: not drawn, only used for hit confirmation. */
+  ghost: boolean;
 }
 
 export interface InputSample {
@@ -84,6 +89,7 @@ export interface FeedEntry {
   weapon: string | null;
   bountyCents: number;
   mine: boolean;
+  byMe: boolean;
 }
 
 export interface Announcement {
@@ -129,9 +135,18 @@ export interface HudState {
   devTools: boolean;
   playerName: string;
   hurtAt: number;
+  /** Recent hits taken, with direction (for the damage indicator). */
+  hurts: { id: number; at: number; angle: number }[];
+  /** Magazine including locally predicted shots (null = no weapon). */
+  mag: number | null;
 }
 
-export type FxEvent = Extract<GameEvent, { e: 'dmg' } | { e: 'hurt' } | { e: 'extractAlert' } | { e: 'kill' }>;
+/** Events for renderer / audio (server events + purely local predictions). */
+export type FxEvent =
+  | Extract<GameEvent, { e: 'dmg' } | { e: 'hurt' } | { e: 'extractAlert' } | { e: 'kill' } | { e: 'loot' } | { e: 'announce' } | { e: 'extract' }>
+  | { e: 'localShot'; weaponId: WeaponId }
+  | { e: 'dryFire' }
+  | { e: 'dash' };
 
 const DT = 1 / NETWORK_CONFIG.tickRate;
 const DT_MS = 1000 / NETWORK_CONFIG.tickRate;
@@ -152,13 +167,16 @@ function gameServerUrl(): string {
 }
 
 /**
- * Networking + client-side simulation. Renders nothing itself: the Phaser
- * scene reads positions from here, React reads `hud`.
+ * Networking + client-side simulation. Renders nothing itself: the Three.js
+ * renderer reads positions from here, React reads `hud`.
  *
  * - Fixed 30 Hz input steps, predicted locally with the shared movement code.
  * - Server snapshots acknowledge input sequence numbers; unacknowledged
  *   inputs are replayed on top of the authoritative state (reconciliation).
- * - Remote players are interpolated ~110 ms in the past.
+ * - Shots are predicted locally for instant feedback (visual only; the server
+ *   still decides every hit).
+ * - Remote players are interpolated ~75 ms in the past, briefly extrapolated
+ *   when a snapshot is late.
  */
 export class GameClient {
   status: ClientStatus = 'connecting';
@@ -183,6 +201,13 @@ export class GameClient {
   private prevY = 0;
   private alpha = 1;
   aim = 0;
+  /** Local shot prediction. */
+  private simTime = 0;
+  private nextLocalFireAt = 0;
+  private lastDryFireAt = 0;
+  private readonly pendingShots = new Map<number, number>();
+  private localBulletId = 0;
+  private hurts: { id: number; at: number; angle: number }[] = [];
 
   // Replicated state
   self: SelfState | null = null;
@@ -315,12 +340,13 @@ export class GameClient {
   private flushHud(): void {
     const now = performance.now();
     const expire = <T extends { at: number }>(list: T[], ms: number) => list.filter((x) => now - x.at < ms);
-    const lens = this.feed.length + this.announcements.length + this.toasts.length + this.notices.length;
+    const lens = this.feed.length + this.announcements.length + this.toasts.length + this.notices.length + this.hurts.length;
     this.feed = expire(this.feed, 7000);
     this.announcements = expire(this.announcements, 4200);
     this.toasts = expire(this.toasts, 3600);
     this.notices = expire(this.notices, 2600);
-    if (lens !== this.feed.length + this.announcements.length + this.toasts.length + this.notices.length) this.hudDirty = true;
+    this.hurts = expire(this.hurts, 1200);
+    if (lens !== this.feed.length + this.announcements.length + this.toasts.length + this.notices.length + this.hurts.length) this.hudDirty = true;
     if (!this.hudDirty) return;
     this.hudDirty = false;
     this.hud = this.buildHud();
@@ -348,7 +374,18 @@ export class GameClient {
       devTools: this.devTools,
       playerName: this.playerName,
       hurtAt: this.hurtAt,
+      hurts: this.hurts,
+      mag: this.displayMag(),
     };
+  }
+
+  /** Server magazine minus shots we predicted but the server has not acknowledged yet. */
+  displayMag(): number | null {
+    const w = this.self?.weapons[this.self.activeSlot];
+    if (!w) return null;
+    let unacked = 0;
+    for (const n of this.pendingShots.values()) unacked += n;
+    return Math.max(0, w.mag - unacked);
   }
 
   // ------------------------------------------------------------- commands
@@ -414,7 +451,11 @@ export class GameClient {
         this.dashQueued = false;
       }
       const cmd: InputCmd = { s: ++this.seq, mx: input.mx, my: input.my, a: Math.round(input.aim * 1000) / 1000, b };
+      const dashBefore = this.predicted.dashTime;
       stepMovement(this.predicted, cmd, DT, this.world!);
+      if (dashBefore <= 0 && this.predicted.dashTime > 0) this.fx.push({ e: 'dash' });
+      this.simTime += DT_MS;
+      if (input.fire) this.predictShot(cmd);
       this.pending.push(cmd);
       out.push(cmd);
     }
@@ -432,6 +473,62 @@ export class GameClient {
     this.updateInteractHint();
   }
 
+  /**
+   * Instant local feedback for our own shots (muzzle flash, recoil, tracer,
+   * ammo counter). Purely visual; the server simulates the real bullets.
+   */
+  private predictShot(cmd: InputCmd): void {
+    const s = this.self;
+    const w = s?.weapons[s.activeSlot];
+    if (!s || !w || s.reloadRemainingMs > 0 || s.useItem || this.simTime < this.nextLocalFireAt) return;
+    const def = WEAPONS[w.weaponId];
+    if ((this.displayMag() ?? 0) <= 0) {
+      if (this.simTime - this.lastDryFireAt > 400) {
+        this.lastDryFireAt = this.simTime;
+        this.fx.push({ e: 'dryFire' });
+      }
+      return;
+    }
+    this.nextLocalFireAt = this.simTime + def.fireIntervalMs;
+    this.pendingShots.set(cmd.s, 1);
+    const x0 = this.predicted.x;
+    const y0 = this.predicted.y;
+    for (let i = 0; i < def.pellets; i++) {
+      const angle = cmd.a + (Math.random() * 2 - 1) * def.spread;
+      const dx = Math.cos(angle);
+      const dy = Math.sin(angle);
+      let maxDist = def.range;
+      let hitPlayer = false;
+      const wall = this.world?.raycast(x0, y0, x0 + dx * def.range, y0 + dy * def.range);
+      if (wall) maxDist = wall.t * def.range;
+      for (const p of this.players.values()) {
+        const t = segmentCircle(x0, y0, dx * def.range, dy * def.range, p.x, p.y, PLAYER_CONFIG.radius);
+        if (t !== null && t * def.range < maxDist) {
+          maxDist = t * def.range;
+          hitPlayer = true;
+        }
+      }
+      this.bullets.push({
+        id: -++this.localBulletId,
+        x0,
+        y0,
+        dx,
+        dy,
+        speed: def.bulletSpeed,
+        maxDist,
+        weapon: weaponIndex(def.id),
+        ownerId: this.playerId ?? -1,
+        born: performance.now(),
+        endDist: null,
+        hitPlayer,
+        local: true,
+        ghost: false,
+      });
+    }
+    this.fx.push({ e: 'localShot', weaponId: def.id });
+    this.markHud();
+  }
+
   private interpolateRemotes(): void {
     if (this.timeOffset === null) return;
     const renderT = this.serverNow() - NETWORK_CONFIG.interpolationDelayMs;
@@ -447,8 +544,12 @@ export class GameClient {
         p.y = a.y;
         p.rot = a.rot;
       } else if (renderT >= b.t) {
-        p.x = b.x;
-        p.y = b.y;
+        // Late snapshot: extrapolate briefly, but only for players that were
+        // still moving in the newest snapshot (unchanged players get no update).
+        const over = b.t === this.lastSnapAt ? Math.min(renderT - b.t, NETWORK_CONFIG.maxExtrapolationMs) : 0;
+        const span = Math.max(1, b.t - a.t);
+        p.x = b.x + ((b.x - a.x) / span) * over;
+        p.y = b.y + ((b.y - a.y) / span) * over;
         p.rot = b.rot;
       } else {
         const t = (renderT - a.t) / (b.t - a.t);
@@ -564,6 +665,7 @@ export class GameClient {
       this.crates.clear();
       this.bullets.length = 0;
       this.pending = [];
+      this.pendingShots.clear();
       this.predictionReady = false;
     }
     if (msg.phase === 'WAITING' || msg.phase === 'STARTING') this.setStatus('lobby');
@@ -578,8 +680,12 @@ export class GameClient {
       this.timeOffset = offset;
       for (const p of this.players.values()) p.samples.splice(0, Math.max(0, p.samples.length - 1));
       for (const p of this.players.values()) if (p.samples[0]) p.samples[0].t = s.time;
+    } else if (offset > this.timeOffset) {
+      // Track the least-delayed packets: follow quickly upward, drift down slowly.
+      // Keeps the interpolation clock stable against network jitter.
+      this.timeOffset += (offset - this.timeOffset) * 0.25;
     } else {
-      this.timeOffset += (offset - this.timeOffset) * 0.05;
+      this.timeOffset += (offset - this.timeOffset) * 0.01;
     }
     this.lastSnapAt = s.time;
 
@@ -616,6 +722,7 @@ export class GameClient {
 
   private reconcile(self: SelfState, ack: number): void {
     this.self = self;
+    for (const seq of this.pendingShots.keys()) if (seq <= ack) this.pendingShots.delete(seq);
     if (!this.world) return;
     if (!this.predictionReady) {
       Object.assign(this.predicted, {
@@ -692,8 +799,11 @@ export class GameClient {
     let maxDist = range;
     const hit = this.world?.raycast(x, y, x + dx * range, y + dy * range);
     if (hit) maxDist = hit.t * range;
-    this.bullets.push({ id, x0: x, y0: y, dx, dy, speed, maxDist, weapon, ownerId, born: performance.now(), endDist: null, hitPlayer: false });
-    if (this.bullets.length > 400) this.bullets.splice(0, this.bullets.length - 400);
+    // Our own shots are already shown via prediction; keep the server copy invisible
+    // so hit confirmations (bullet end events) still line up.
+    const ghost = ownerId === this.playerId;
+    this.bullets.push({ id, x0: x, y0: y, dx, dy, speed, maxDist, weapon, ownerId, born: performance.now(), endDist: null, hitPlayer: false, local: false, ghost });
+    if (this.bullets.length > 500) this.bullets.splice(0, this.bullets.length - 500);
   }
 
   private endBullet(e: BulletEnd): void {
@@ -719,18 +829,21 @@ export class GameClient {
             weapon: ev.weapon,
             bountyCents: ev.bountyCents,
             mine: ev.killerId === this.playerId || ev.victimId === this.playerId,
+            byMe: ev.killerId !== null && ev.killerId === this.playerId,
           },
         ];
         this.fx.push(ev);
         break;
       case 'announce':
         this.announcements = [...this.announcements.slice(-2), { id: this.uid++, at: now, text: ev.text, sub: ev.sub, kind: ev.kind }];
+        this.fx.push(ev);
         break;
       case 'bounty':
         this.notices = [...this.notices.slice(-3), { id: this.uid++, at: now, text: `${ev.name} bounty raised` }];
         break;
       case 'loot':
         this.toasts = [...this.toasts.slice(-2), { id: this.uid++, at: now, itemId: ev.itemId, qty: ev.qty, rarity: ev.rarity, value: ev.value }];
+        this.fx.push(ev);
         break;
       case 'notice':
         this.notices = [...this.notices.slice(-3), { id: this.uid++, at: now, text: ev.text }];
@@ -740,6 +853,7 @@ export class GameClient {
           ...this.notices.slice(-3),
           { id: this.uid++, at: now, text: ev.state === 'started' ? 'Extraction started — hold position' : `Extraction cancelled · ${ev.reason ?? ''}` },
         ];
+        this.fx.push(ev);
         break;
       case 'extractAlert':
         this.extractAlertAt = now;
@@ -747,6 +861,7 @@ export class GameClient {
         break;
       case 'hurt':
         this.hurtAt = now;
+        this.hurts = [...this.hurts.slice(-3), { id: this.uid++, at: now, angle: ev.angle }];
         this.fx.push(ev);
         break;
       case 'dmg':

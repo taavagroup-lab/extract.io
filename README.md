@@ -126,7 +126,10 @@ pnpm dev:api
 | **Tab** | Inventar (Secure-Slot, Drop, Use) |
 | **M** | Karte |
 | **H / G** | Medkit / Armor Plate benutzen |
+| **Esc** | Menü: Grafikqualität (Auto/Low/Medium/High/Ultra), FPS-Anzeige, Lautstärke, Match verlassen |
 | **`** oder **F2** | Dev-Panel (nur Dev) |
+
+**Spielgefühl:** Schüsse werden lokal vorhergesagt (Mündungsblitz, Rückstoß, Leuchtspur und Munition reagieren sofort; Treffer entscheidet der Server), Fadenkreuz mit Hitmarker/Kill-Marker, Treffer-Richtungsanzeige, Low-HP-Puls, prozeduraler Sound (Waffen, Treffer, Pickups nach Rarity, Extraction-Countdown, Herzschlag) – alles ohne Asset-Dateien. „Auto“-Grafik passt Auflösung, Bloom und Schatten an die Framerate an.
 
 Ablauf: Loot-Phase (0–2 min) → Combat-Phase (2–7 min, *The Vault* öffnet) → Extraction-Phase (7–10 min, 3 Extraction-Punkte aktiv, 10 s in der Zone bleiben). Wer bei 10:00 nicht extrahiert ist, behält nur den Secure-Slot.
 
@@ -143,11 +146,10 @@ Um nicht 7 Minuten auf die Extraction-Phase zu warten: Dev-Panel (`` ` ``) → *
 
 ### Solo-Sandbox ohne Bots (Grafik / Features in Ruhe testen)
 
-Zweiten Game Server ohne Bots starten und den Client per `?gs=` darauf zeigen lassen (nur im Dev-Modus):
+Zweiten Game Server ohne Bots starten (Port 3102, startet ab einem Spieler) und den Client per `?gs=` darauf zeigen lassen (nur im Dev-Modus):
 
 ```bash
-cd apps/game-server
-GAME_SERVER_PORT=3102 MATCH_FILL_WITH_BOTS=false MATCH_MIN_HUMANS=1 LOBBY_WAIT_SECONDS=2 npx tsx src/index.ts
+pnpm dev:sandbox
 ```
 Dann http://localhost:5173/?gs=ws://localhost:3102/ws öffnen. Im Dev-Modus gibt es außerdem `window.__extractRenderer.zoom(0.3)` in der Browser-Konsole, um Modelle aus der Nähe anzusehen.
 

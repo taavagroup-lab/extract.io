@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "bots": "tsx scripts/spawnBots.ts",
+    "sandbox": "tsx watch --clear-screen=false scripts/sandbox.ts",
     "loadtest": "tsx scripts/loadtest.ts"
   },
   "dependencies": {

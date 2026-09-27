@@ -13,6 +13,7 @@
     "dev:web": "pnpm --filter @extract/web dev",
     "dev:game": "pnpm --filter @extract/game-server dev",
     "dev:api": "pnpm --filter @extract/api dev",
+    "dev:sandbox": "pnpm --filter @extract/game-server sandbox",
     "build": "pnpm -r build",
     "start": "pnpm --parallel --filter @extract/api --filter @extract/game-server start",
     "typecheck": "pnpm -r typecheck",

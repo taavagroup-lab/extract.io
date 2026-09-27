@@ -131,7 +131,7 @@ export function buildMap(map: MapData): MapVisuals {
     const w = Math.min(z.w * 0.8, 1100);
     const plane = new THREE.Mesh(
       new THREE.PlaneGeometry(w, w / 4),
-      new THREE.MeshBasicMaterial({ map: labelTexture(z.name.toUpperCase()), transparent: true, opacity: 0.1, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ map: labelTexture(z.name.toUpperCase()), transparent: true, opacity: 0.05, depthWrite: false }),
     );
     plane.rotation.x = -Math.PI / 2;
     plane.position.set(z.x + z.w / 2, 3, z.y + z.h / 2);

@@ -4,7 +4,8 @@ export interface OverlayHandlers {
   toggleInventory(): void;
   toggleMap(): void;
   toggleDev(): void;
-  closeOverlays(): void;
+  /** Escape: close the open overlay, or toggle the game menu. */
+  escape(): void;
 }
 
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
@@ -58,7 +59,10 @@ export class InputController {
       if (!e.repeat) this.overlays.toggleInventory();
       return;
     }
-    if (e.code === 'Escape') return this.overlays.closeOverlays();
+    if (e.code === 'Escape') {
+      if (!e.repeat) this.overlays.escape();
+      return;
+    }
     if (e.code === 'Backquote' || e.code === 'F2') {
       e.preventDefault();
       if (!e.repeat) this.overlays.toggleDev();

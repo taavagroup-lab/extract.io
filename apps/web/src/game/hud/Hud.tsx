@@ -41,15 +41,25 @@ function WeaponPanel({ hud }: { hud: HudState }) {
   const active = s.weapons[s.activeSlot];
   const def = active ? WEAPONS[active.weaponId] : null;
   const reserve = def ? s.ammo[def.ammoType] : 0;
+  const mag = hud.mag ?? active?.mag ?? 0;
+  const lowAmmo = def ? mag <= Math.ceil(def.magazineSize * 0.25) : false;
   return (
     <div className="hud-weapon">
       <div className="hud-weapon__main">
+        {active && <ItemIcon type="WEAPON" rarity={getItemDef(active.itemId).rarity} icon={getItemDef(active.itemId).icon} size={34} />}
         <span className="hud-weapon__name">{def?.name ?? 'Unarmed'}</span>
         <span className="hud-weapon__ammo">
-          <b className={active && active.mag === 0 ? 'is-empty' : ''}>{active?.mag ?? 0}</b>
+          <b className={mag === 0 ? 'is-empty' : lowAmmo ? 'is-low' : ''}>{mag}</b>
           <small> / {reserve}</small>
         </span>
       </div>
+      {def && (
+        <div className="hud-mag" aria-hidden="true">
+          {Array.from({ length: Math.min(def.magazineSize, 30) }, (_, i) => (
+            <i key={i} className={i < Math.round((mag / def.magazineSize) * Math.min(def.magazineSize, 30)) ? 'is-full' : ''} />
+          ))}
+        </div>
+      )}
       <div className="hud-weapon__slots">
         {s.weapons.map((w, i) => (
           <span key={i} className={`hud-slot ${i === s.activeSlot ? 'is-active' : ''} ${w ? '' : 'is-empty'}`}>
@@ -75,17 +85,37 @@ function WeaponPanel({ hud }: { hud: HudState }) {
 }
 
 export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
-  const now = useTicker(200);
+  const now = useTicker(100);
   const s = hud.self;
   const g = hud.global;
   const hurt = now - hud.hurtAt < 350;
+  const lowHp = !!s && s.hp > 0 && s.hp < 30;
   const alertOn = now - hud.extractAlertAt < 3500;
   const medkits = hud.inventory.slots.reduce((n, x) => n + (x?.itemId === 'medkit' ? x.qty : 0), 0);
   const plates = hud.inventory.slots.reduce((n, x) => n + (x?.itemId === 'armor_plate' ? x.qty : 0), 0);
+  const lastKill = [...hud.feed].reverse().find((f) => f.byMe && now - f.at < 1800);
 
   return (
     <div className="hud" aria-live="polite">
-      <div className={`hud-vignette ${hurt ? 'is-on' : ''}`} />
+      <div className={`hud-vignette ${hurt ? 'is-on' : ''} ${lowHp ? 'is-low' : ''}`} />
+
+      {hud.hurts.map((h) => (
+        <div
+          key={h.id}
+          className="hud-hurt-dir"
+          style={{ transform: `translate(-50%, -50%) rotate(${h.angle}rad)`, opacity: Math.max(0, 1 - (now - h.at) / 1200) }}
+        >
+          <i />
+        </div>
+      ))}
+
+      {lastKill && (
+        <div key={lastKill.id} className="hud-killconfirm">
+          <span>ELIMINATED</span>
+          <strong>{lastKill.victim}</strong>
+          {lastKill.bountyCents > 0 && <em>+{formatCents(lastKill.bountyCents)} BOUNTY</em>}
+        </div>
+      )}
 
       <div className="hud-top-left">
         <Minimap client={client} />

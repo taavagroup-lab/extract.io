@@ -1,10 +1,12 @@
 export const NETWORK_CONFIG = {
   /** Server simulation ticks per second. Clients simulate input at the same rate. */
   tickRate: 30,
-  /** Send a snapshot every N ticks (30 / 2 = 15 Hz). */
-  snapshotEveryTicks: 2,
-  /** Remote entities are rendered this far in the past. */
-  interpolationDelayMs: 110,
+  /** Send a snapshot every N ticks (30 Hz): smoother remote players, faster feedback. */
+  snapshotEveryTicks: 1,
+  /** Remote entities are rendered this far in the past (~2 snapshots of jitter buffer). */
+  interpolationDelayMs: 75,
+  /** Max time remote players are extrapolated when a snapshot is late. */
+  maxExtrapolationMs: 70,
   /** Logical view the client camera shows (it zooms to fit the screen). */
   view: { width: 1600, height: 1000 },
   /** Interest area half-extents around a player (a bit larger than half the view). */
