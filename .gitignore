@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+.env
+.env.local
+*.log
+.data/
+.DS_Store
+packages/database/generated/

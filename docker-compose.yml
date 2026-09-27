@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: extractio-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: extract
+      POSTGRES_PASSWORD: extract
+      POSTGRES_DB: extractio
+    ports:
+      - "5432:5432"
+    volumes:
+      - extractio-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U extract -d extractio"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  extractio-pg:

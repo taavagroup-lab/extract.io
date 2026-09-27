@@ -1,0 +1,5 @@
+# LF everywhere: Prisma checksums migration files, CRLF checkouts would break `migrate deploy`.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,317 @@
+// EXTRACT.IO persistent data model (PostgreSQL).
+// Money is stored as integer cents of TEST USDC.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ItemRarity {
+  COMMON
+  RARE
+  EPIC
+  LEGENDARY
+  MYTHIC
+}
+
+enum ItemCategory {
+  WEAPON
+  AMMO
+  CONSUMABLE
+  VALUABLE
+  COSMETIC
+}
+
+enum InventoryItemStatus {
+  OWNED
+  LISTED
+}
+
+enum ListingStatus {
+  ACTIVE
+  SOLD
+  CANCELLED
+}
+
+enum MatchStatus {
+  RUNNING
+  FINISHED
+}
+
+enum MatchOutcome {
+  EXTRACTED
+  DIED
+  TIMEOUT
+  ABANDONED
+}
+
+enum LeaderboardCategory {
+  MOST_KILLS
+  MOST_EXTRACTIONS
+  HIGHEST_LOOT_EXTRACTED
+  HIGHEST_SINGLE_EXTRACTION
+  HIGHEST_KILL_STREAK
+  BOUNTY_KILLS
+}
+
+enum LeaderboardPeriod {
+  WEEKLY
+  SEASON
+  ALL_TIME
+}
+
+model User {
+  id            String   @id @default(cuid())
+  username      String
+  usernameLower String   @unique
+  passwordHash  String?
+  isGuest       Boolean  @default(true)
+  /// Optional wallet (only needed for on-chain features).
+  walletAddress String?  @unique
+  walletChain   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  profile      PlayerProfile?
+  inventory    Inventory?
+  matchPlayers MatchPlayer[]
+  extractions  Extraction[]
+  listings     MarketplaceListing[]     @relation("SellerListings")
+  purchases    MarketplaceTransaction[] @relation("BuyerTransactions")
+  sales        MarketplaceTransaction[] @relation("SellerTransactions")
+  leaderboard  LeaderboardEntry[]
+  killsMade    Kill[]                   @relation("KillerKills")
+  deaths       Kill[]                   @relation("VictimKills")
+}
+
+model PlayerProfile {
+  id                           String   @id @default(cuid())
+  userId                       String   @unique
+  user                         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// TEST USDC balance in cents. Never negative (enforced by conditional updates + check constraint).
+  balanceCents                 Int      @default(0)
+  totalMatches                 Int      @default(0)
+  totalKills                   Int      @default(0)
+  totalDeaths                  Int      @default(0)
+  totalExtractions             Int      @default(0)
+  totalLootExtractedCents      Int      @default(0)
+  highestSingleExtractionCents Int      @default(0)
+  highestKillStreak            Int      @default(0)
+  bountyKills                  Int      @default(0)
+  bountyEarnedCents            Int      @default(0)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @default(now()) @updatedAt
+}
+
+model Inventory {
+  id        String          @id @default(cuid())
+  userId    String          @unique
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     InventoryItem[]
+  createdAt DateTime        @default(now())
+}
+
+model ItemDefinition {
+  id                  String       @id
+  name                String
+  type                ItemCategory
+  rarity              ItemRarity
+  stackable           Boolean
+  maxStack            Int
+  estimatedValueCents Int
+  icon                String
+  metadata            Json         @default("{}")
+  persistable         Boolean      @default(true)
+  /// Limited season items.
+  seasonId            String?
+  season              Season?      @relation(fields: [seasonId], references: [id])
+  maxSupply           Int?
+  currentSupply       Int          @default(0)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  inventoryItems InventoryItem[]
+  listings       MarketplaceListing[]
+}
+
+model InventoryItem {
+  id               String              @id @default(cuid())
+  inventoryId      String
+  inventory        Inventory           @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  itemDefinitionId String
+  itemDefinition   ItemDefinition      @relation(fields: [itemDefinitionId], references: [id])
+  quantity         Int
+  status           InventoryItemStatus @default(OWNED)
+  seasonId         String?
+  season           Season?             @relation(fields: [seasonId], references: [id])
+  /// Serial number for limited items, e.g. Genesis Crown #73 / 1000.
+  serialNumber     Int?
+  sourceMatchId    String?
+  acquiredAt       DateTime            @default(now())
+  updatedAt        DateTime            @default(now()) @updatedAt
+
+  /// Optional on-chain ownership. Null for regular off-chain items.
+  blockchainAssetId String?
+  mintAddress       String?
+  tokenId           String?
+  chain             String?
+  ownerWallet       String?
+
+  listings MarketplaceListing[]
+
+  @@unique([itemDefinitionId, serialNumber])
+  @@index([inventoryId, status])
+}
+
+model Match {
+  id          String      @id
+  seasonId    String?
+  season      Season?     @relation(fields: [seasonId], references: [id])
+  mapId       String
+  status      MatchStatus @default(RUNNING)
+  startedAt   DateTime    @default(now())
+  endedAt     DateTime?
+  playerCount Int         @default(0)
+  botCount    Int         @default(0)
+  summary     Json?
+
+  players     MatchPlayer[]
+  kills       Kill[]
+  extractions Extraction[]
+}
+
+model MatchPlayer {
+  id                String       @id @default(cuid())
+  matchId           String
+  match             Match        @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outcome           MatchOutcome
+  kills             Int          @default(0)
+  damageDealt       Int          @default(0)
+  lootValueCents    Int          @default(0)
+  securedValueCents Int          @default(0)
+  lostValueCents    Int          @default(0)
+  bountyEarnedCents Int          @default(0)
+  survivedMs        Int          @default(0)
+  createdAt         DateTime     @default(now())
+
+  /// One result per user per match: makes result persistence idempotent.
+  @@unique([matchId, userId])
+  @@index([userId, createdAt])
+}
+
+model Kill {
+  id            String   @id @default(cuid())
+  matchId       String
+  match         Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  killerUserId  String?
+  killer        User?    @relation("KillerKills", fields: [killerUserId], references: [id], onDelete: SetNull)
+  victimUserId  String?
+  victim        User?    @relation("VictimKills", fields: [victimUserId], references: [id], onDelete: SetNull)
+  killerName    String?
+  victimName    String
+  weaponId      String?
+  wasBountyKill Boolean  @default(false)
+  bountyCents   Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([matchId])
+}
+
+model Extraction {
+  id                String   @id @default(cuid())
+  matchId           String
+  match             Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  extractionPointId String
+  itemCount         Int
+  valueCents        Int
+  survivedMs        Int
+  createdAt         DateTime @default(now())
+
+  @@unique([matchId, userId])
+}
+
+model MarketplaceListing {
+  id               String         @id @default(cuid())
+  sellerId         String
+  seller           User           @relation("SellerListings", fields: [sellerId], references: [id], onDelete: Cascade)
+  /// The escrowed inventory row (status LISTED while the listing is active).
+  inventoryItemId  String
+  inventoryItem    InventoryItem  @relation(fields: [inventoryItemId], references: [id])
+  itemDefinitionId String
+  itemDefinition   ItemDefinition @relation(fields: [itemDefinitionId], references: [id])
+  /// Denormalized for search / sort.
+  itemName         String
+  rarity           ItemRarity
+  rarityRank       Int
+  quantity         Int
+  priceCents       Int
+  status           ListingStatus  @default(ACTIVE)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  closedAt         DateTime?
+
+  transaction MarketplaceTransaction?
+
+  @@index([status, createdAt])
+  @@index([status, priceCents])
+  @@index([status, rarityRank])
+  @@index([sellerId, status])
+}
+
+model MarketplaceTransaction {
+  id                  String             @id @default(cuid())
+  /// Unique: a listing can be sold exactly once.
+  listingId           String             @unique
+  listing             MarketplaceListing @relation(fields: [listingId], references: [id])
+  buyerId             String
+  buyer               User               @relation("BuyerTransactions", fields: [buyerId], references: [id])
+  sellerId            String
+  seller              User               @relation("SellerTransactions", fields: [sellerId], references: [id])
+  priceCents          Int
+  feeCents            Int
+  sellerProceedsCents Int
+  /// Client supplied; retried requests return the original transaction.
+  idempotencyKey      String             @unique
+  createdAt           DateTime           @default(now())
+
+  @@index([buyerId])
+  @@index([sellerId])
+}
+
+model Season {
+  id        String   @id
+  number    Int      @unique
+  name      String
+  startDate DateTime
+  endDate   DateTime
+  isActive  Boolean  @default(false)
+
+  specialItems   ItemDefinition[]
+  inventoryItems InventoryItem[]
+  matches        Match[]
+  leaderboard    LeaderboardEntry[]
+}
+
+model LeaderboardEntry {
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category  LeaderboardCategory
+  period    LeaderboardPeriod
+  /// WEEKLY: ISO week ("2026-W39"), SEASON: season id, ALL_TIME: "all".
+  periodKey String
+  seasonId  String?
+  season    Season?             @relation(fields: [seasonId], references: [id])
+  value     Int                 @default(0)
+  updatedAt DateTime            @default(now()) @updatedAt
+
+  @@id([userId, category, period, periodKey])
+  @@index([category, period, periodKey, value(sort: Desc)])
+}
