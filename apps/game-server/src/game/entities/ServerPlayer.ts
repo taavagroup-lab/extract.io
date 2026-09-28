@@ -50,6 +50,8 @@ export class ServerPlayer {
   pendingBountyCents = 0;
   bountyKills = 0;
   extractedLootValue = 0;
+  /** Bag currently at the KINGPIN threat tier (maintained by KingpinSystem). */
+  kingpin = false;
 
   nextFireAt = 0;
   reload: { slot: number; endsAt: number; totalMs: number } | null = null;
@@ -113,6 +115,7 @@ export class ServerPlayer {
     if (this.use) flags |= PLAYER_FLAGS.USING_ITEM;
     if (this.reload) flags |= PLAYER_FLAGS.RELOADING;
     if (this.status === 'DISCONNECTED') flags |= PLAYER_FLAGS.DISCONNECTED;
+    if (this.kingpin) flags |= PLAYER_FLAGS.KINGPIN;
     const weapon = this.inventory.activeWeapon();
     this.net = [
       this.id,

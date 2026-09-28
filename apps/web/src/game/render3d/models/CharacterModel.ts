@@ -12,6 +12,8 @@ const cube = new THREE.BoxGeometry(1, 1, 1);
 const capsule = new THREE.CapsuleGeometry(1, 1, 4, 10);
 const ring = new THREE.RingGeometry(0.86, 1, 48);
 const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 32, 1, true);
+const gemGeo = new THREE.OctahedronGeometry(1, 0);
+const KINGPIN_GOLD = 0xf5c542;
 const OUTLINE = new THREE.MeshBasicMaterial({ color: 0x05070a, side: THREE.BackSide });
 /** Visual scale so the model covers the 22-unit hitbox. */
 const MODEL_SCALE = 1.2;
@@ -54,6 +56,9 @@ export class CharacterModel {
   private readonly extractRing: THREE.Mesh;
   private readonly extractBeam: THREE.Mesh;
   private readonly disconnectRing: THREE.Mesh;
+  /** KINGPIN: gold ring + floating gem (visible to everyone nearby). */
+  private readonly kingpinRing: THREE.Mesh;
+  private readonly kingpinGem: THREE.Mesh;
   private weapon: WeaponId | null | undefined = undefined;
   private muzzle = 20;
   private phase = 0;
@@ -124,10 +129,14 @@ export class CharacterModel {
     this.bountyRing = flat(COLORS.danger, 38, 0.9, 2);
     this.extractRing = flat(COLORS.extraction, 34, 0.9, 2.2);
     this.disconnectRing = flat(0x9ca3af, 32, 0.6, 2.4);
+    this.kingpinRing = flat(KINGPIN_GOLD, 46, 0.85, 2.6);
+    this.kingpinGem = new THREE.Mesh(gemGeo, glow(KINGPIN_GOLD, 0.95, null, 2.4));
+    this.kingpinGem.scale.set(5, 8, 5);
+    this.kingpinGem.position.y = 74;
     this.extractBeam = new THREE.Mesh(beamGeo, glow(COLORS.extraction, 0.55, Textures.beam(), 1.4));
     this.extractBeam.scale.set(30, 160, 30);
     this.extractBeam.position.y = 80;
-    for (const m of [this.bountyRing, this.extractRing, this.disconnectRing, this.extractBeam]) {
+    for (const m of [this.bountyRing, this.extractRing, this.disconnectRing, this.extractBeam, this.kingpinRing, this.kingpinGem]) {
       m.visible = false;
       this.root.add(m);
     }
@@ -203,6 +212,15 @@ export class CharacterModel {
     this.extractBeam.visible = extracting;
     if (extracting) this.extractRing.scale.setScalar(32 + pulse * 6);
     this.disconnectRing.visible = (flags & PLAYER_FLAGS.DISCONNECTED) !== 0;
+    const kingpin = (flags & PLAYER_FLAGS.KINGPIN) !== 0;
+    this.kingpinRing.visible = kingpin;
+    this.kingpinGem.visible = kingpin;
+    if (kingpin) {
+      this.kingpinRing.rotation.z = -time / 900;
+      this.kingpinRing.scale.setScalar(44 + pulse * 5);
+      this.kingpinGem.rotation.y = time / 500;
+      this.kingpinGem.position.y = 74 + Math.sin(time / 260) * 3;
+    }
   }
 
   dispose(): void {

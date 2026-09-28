@@ -253,7 +253,7 @@ describe('persistence resilience', () => {
     await resilient.savePlayerResult({
       matchId: 'm1', userId: 'u1', seasonId: null, outcome: 'EXTRACTED', kills: 0, damageDealt: 0, survivedMs: 1,
       lootValueCents: 1, securedValueCents: 1, lostValueCents: 0, bountyEarnedCents: 0, bountyKills: 0, payoutCents: 0,
-      items: [{ itemId: 'scrap', qty: 1 }], extraction: null,
+      items: [{ itemId: 'scrap', qty: 1 }], extraction: null, xp: 0,
     });
     await new Promise((r) => setTimeout(r, 100));
     await resilient.flush();

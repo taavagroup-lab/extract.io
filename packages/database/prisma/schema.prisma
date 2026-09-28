@@ -56,6 +56,8 @@ enum LeaderboardCategory {
   HIGHEST_SINGLE_EXTRACTION
   HIGHEST_KILL_STREAK
   BOUNTY_KILLS
+  SEASON_XP
+  KINGPIN_EXTRACTIONS
 }
 
 enum LeaderboardPeriod {
@@ -103,6 +105,14 @@ model PlayerProfile {
   highestKillStreak            Int      @default(0)
   bountyKills                  Int      @default(0)
   bountyEarnedCents            Int      @default(0)
+  /// LEGENDARY + MYTHIC units extracted (counted since migration 20260928_presentation_stats).
+  legendaryExtracted           Int      @default(0)
+  /// Extractions whose bag reached the KINGPIN threat tier.
+  kingpinExtractions           Int      @default(0)
+  /// Lifetime season XP (per-season totals live in LeaderboardEntry SEASON_XP).
+  totalXp                      Int      @default(0)
+  /// Seconds spent inside raids.
+  totalPlaytimeSec             Int      @default(0)
   createdAt                    DateTime @default(now())
   updatedAt                    DateTime @default(now()) @updatedAt
 }
@@ -198,6 +208,8 @@ model MatchPlayer {
   lostValueCents    Int          @default(0)
   bountyEarnedCents Int          @default(0)
   survivedMs        Int          @default(0)
+  /// Season XP earned by this run.
+  xp                Int          @default(0)
   createdAt         DateTime     @default(now())
 
   /// One result per user per match: makes result persistence idempotent.

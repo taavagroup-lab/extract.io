@@ -46,6 +46,7 @@ export function toInventoryItemDTO(row: InventoryRow): InventoryItemDTO {
     seasonName: row.season?.name ?? null,
     serialNumber: row.serialNumber,
     maxSupply: def.maxSupply,
+    discovered: def.maxSupply !== null ? def.currentSupply : null,
     status: row.status,
     blockchain: row.mintAddress
       ? {
@@ -62,10 +63,18 @@ export function toInventoryItemDTO(row: InventoryRow): InventoryItemDTO {
 export type ListingRow = MarketplaceListing & {
   seller: { username: string };
   itemDefinition: ItemDefinitionRow;
-  inventoryItem: InventoryItem;
+  /** The season is where the escrowed unit was found. */
+  inventoryItem: InventoryItem & { season: Season | null };
 };
 
-export function toListingDTO(l: ListingRow): ListingDTO {
+/** Per-unit market reference prices by item definition id. */
+export interface MarketStats {
+  floorCents: number | null;
+  lastSaleCents: number | null;
+}
+
+export function toListingDTO(l: ListingRow, stats?: MarketStats): ListingDTO {
+  const def = l.itemDefinition;
   return {
     id: l.id,
     itemId: l.itemDefinitionId,
@@ -79,8 +88,12 @@ export function toListingDTO(l: ListingRow): ListingDTO {
     sellerName: l.seller.username,
     status: l.status,
     serialNumber: l.inventoryItem.serialNumber,
-    maxSupply: l.itemDefinition.maxSupply,
+    maxSupply: def.maxSupply,
     createdAt: l.createdAt.toISOString(),
+    seasonName: l.inventoryItem.season?.name ?? null,
+    remainingSupply: def.maxSupply !== null ? Math.max(0, def.maxSupply - def.currentSupply) : null,
+    floorCents: stats?.floorCents ?? null,
+    lastSaleCents: stats?.lastSaleCents ?? null,
   };
 }
 

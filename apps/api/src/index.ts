@@ -8,6 +8,7 @@ loadRootEnv();
 const config = loadApiConfig();
 const logger = createLogger('api');
 const analytics = new AnalyticsBus((err) => logger.warn({ err }, 'analytics sink failed')).addSink(new LogAnalyticsSink(logger));
+for (const w of config.warnings) logger.warn(w);
 const db = getPrisma();
 const chain = createBlockchainProvider(config.blockchainProvider);
 

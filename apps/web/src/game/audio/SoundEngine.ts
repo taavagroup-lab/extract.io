@@ -153,15 +153,19 @@ class SoundEngine {
     this.noiseBurst(ctx, dest, 'lowpass', 500, 1, 0.35, 0.12);
   }
 
+  /** Loot pickup: more notes, sparkle and a sub "weight" as rarity rises. */
   pickup(rarity: Rarity): void {
     const ctx = this.ready();
     const notes = PICKUP_NOTES[rarity];
-    const dest = ctx && this.out(ctx, 0, notes.length * 0.07 + 0.4);
+    const dest = ctx && this.out(ctx, 0, notes.length * 0.07 + 0.6);
     if (!ctx || !dest) return;
+    const top = rarity === 'LEGENDARY' || rarity === 'MYTHIC';
     notes.forEach((n, i) => {
-      this.tone(ctx, dest, 'triangle', n, n, 0.16, 0.22, i * 0.07);
-      if (rarity === 'LEGENDARY' || rarity === 'MYTHIC') this.tone(ctx, dest, 'sine', n * 2, n * 2, 0.06, 0.3, i * 0.07 + 0.02);
+      this.tone(ctx, dest, 'triangle', n, n, top ? 0.18 : 0.16, top ? 0.3 : 0.22, i * 0.07);
+      if (top) this.tone(ctx, dest, 'sine', n * 2, n * 2, 0.06, 0.4, i * 0.07 + 0.02);
     });
+    if (rarity !== 'COMMON') this.noiseBurst(ctx, dest, 'highpass', 6000, 0.7, 0.05 + 0.03 * notes.length, 0.25, notes.length * 0.07);
+    if (top) this.tone(ctx, dest, 'sine', 110, 55, 0.3, 0.5);
   }
 
   reload(): void {
@@ -235,6 +239,33 @@ class SoundEngine {
     const ctx = this.ready();
     const dest = ctx && this.out(ctx, 0, 0.06);
     if (ctx && dest) this.tone(ctx, dest, 'sine', 1400, 1100, 0.08, 0.04);
+  }
+
+  /** Very quiet tick for menu hovers (throttled by the caller). */
+  uiHover(): void {
+    const ctx = this.ready();
+    const dest = ctx && this.out(ctx, 0, 0.05);
+    if (ctx && dest) this.tone(ctx, dest, 'sine', 2200, 1900, 0.025, 0.03);
+  }
+
+  /** KINGPIN detected: low two-tone siren. */
+  kingpin(): void {
+    const ctx = this.ready();
+    const dest = ctx && this.out(ctx, 0, 1.1);
+    if (!ctx || !dest) return;
+    for (let i = 0; i < 2; i++) {
+      this.tone(ctx, dest, 'sawtooth', 220, 330, 0.07, 0.28, i * 0.34);
+      this.tone(ctx, dest, 'sine', 110, 110, 0.18, 0.3, i * 0.34);
+    }
+  }
+
+  /** Extraction interrupted: falling buzz. */
+  extractCancel(): void {
+    const ctx = this.ready();
+    const dest = ctx && this.out(ctx, 0, 0.5);
+    if (!ctx || !dest) return;
+    this.tone(ctx, dest, 'square', 330, 110, 0.07, 0.35);
+    this.noiseBurst(ctx, dest, 'lowpass', 900, 1, 0.2, 0.2);
   }
 }
 

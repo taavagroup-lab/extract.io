@@ -23,6 +23,8 @@ export interface PlayerRunResult {
   payoutCents: number;
   items: ItemAmount[];
   extraction: { pointId: string; valueCents: number } | null;
+  /** Season XP for this run (shared computeRunXp). */
+  xp: number;
 }
 
 export interface KillRecord {

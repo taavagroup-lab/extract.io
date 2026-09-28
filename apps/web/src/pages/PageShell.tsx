@@ -1,25 +1,53 @@
-import { Button, Money } from '@extract/ui';
+import { Button } from '@extract/ui';
 import type { ReactNode } from 'react';
-import { navigate } from '../lib/router';
+import { Usdc, Wordmark } from '../components/Brand';
+import { navigate, useRoute, type Route } from '../lib/router';
 import { session } from '../lib/session';
 import { useStore } from '../lib/store';
 
-export function PageShell({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
+const LINKS: { route: Route; label: string }[] = [
+  { route: 'inventory', label: 'Inventory' },
+  { route: 'marketplace', label: 'Market' },
+  { route: 'leaderboard', label: 'Leaderboard' },
+  { route: 'profile', label: 'Profile' },
+];
+
+export function PageShell({
+  title,
+  kicker,
+  children,
+  actions,
+}: {
+  title: string;
+  kicker?: string;
+  children: ReactNode;
+  actions?: ReactNode;
+}) {
   const { user } = useStore(session);
+  const route = useRoute();
   return (
     <div className="page">
       <header className="page-header">
-        <button className="brand" onClick={() => navigate('menu')}>
-          EXTRACT<span>.IO</span>
+        <button className="page-brand" onClick={() => navigate('menu')} aria-label="Main menu">
+          <Wordmark />
         </button>
-        <h1 className="page-title">{title}</h1>
+        <nav className="main-nav" aria-label="Main">
+          {LINKS.map((l) => (
+            <button
+              key={l.route}
+              className={`main-nav__link ${route === l.route ? 'is-active' : ''}`}
+              aria-current={route === l.route ? 'page' : undefined}
+              onClick={() => navigate(l.route)}
+            >
+              {l.label}
+            </button>
+          ))}
+        </nav>
         <div className="page-header__right">
-          {actions}
           {user && (
             <div className="user-chip">
-              <span>{user.username}</span>
-              <Money cents={user.balanceCents} className="user-chip__balance" />
-              <small>TEST USDC</small>
+              <span className="user-chip__name">{user.username}</span>
+              <Usdc cents={user.balanceCents} className="user-chip__balance" />
             </div>
           )}
           <Button variant="primary" size="sm" onClick={() => navigate('play')}>
@@ -27,7 +55,14 @@ export function PageShell({ title, children, actions }: { title: string; childre
           </Button>
         </div>
       </header>
-      <main className="page-body">{children}</main>
+      <main className="page-body">
+        <div className="page-intro">
+          {kicker && <p className="x-kicker">{kicker}</p>}
+          <h1 className="page-title">{title}</h1>
+          {actions && <div className="page-intro__actions">{actions}</div>}
+        </div>
+        {children}
+      </main>
     </div>
   );
 }

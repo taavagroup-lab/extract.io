@@ -103,6 +103,8 @@ export interface DeathSummary {
   keptItems: ItemAmount[];
   lostItems: ItemAmount[];
   bountyLostCents: Cents;
+  /** Season XP earned by this run (server computed). */
+  xp: number;
 }
 
 export interface ExtractionSummary {
@@ -113,4 +115,6 @@ export interface ExtractionSummary {
   damageDealt: number;
   survivedMs: number;
   bountyEarnedCents: Cents;
+  /** Season XP earned by this run (server computed). */
+  xp: number;
 }

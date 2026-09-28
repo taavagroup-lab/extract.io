@@ -4,12 +4,12 @@ import type { ListingDTO, ListingQuery, Paginated, TransactionDTO } from '@extra
 import { logEvent, type AnalyticsBus, type Logger } from '@extract/server-core';
 import { calculateMarketplaceFee } from '@extract/shared';
 import { AppError, badRequest, conflict, notFound, paymentRequired } from '../errors';
-import { toListingDTO, toTransactionDTO } from '../mappers';
+import { toListingDTO, toTransactionDTO, type ListingRow, type MarketStats } from '../mappers';
 
 const listingInclude = {
   seller: { select: { username: true } },
   itemDefinition: true,
-  inventoryItem: true,
+  inventoryItem: { include: { season: true } },
 } satisfies Prisma.MarketplaceListingInclude;
 
 const txInclude = {
@@ -63,7 +63,39 @@ export class MarketplaceService {
       this.db.marketplaceListing.count({ where }),
       this.db.marketplaceListing.findMany({ where, orderBy, skip: (page - 1) * pageSize, take: pageSize, include: listingInclude }),
     ]);
-    return { items: rows.map(toListingDTO), total, page, pageSize };
+    return { items: await this.withMarketStats(rows), total, page, pageSize };
+  }
+
+  /**
+   * Floor (lowest active asking price per unit) and last sale (per unit) for
+   * the item definitions on one page: two grouped queries, no per-row lookups.
+   */
+  async marketStats(itemIds: readonly string[]): Promise<Map<string, MarketStats>> {
+    const out = new Map<string, MarketStats>();
+    const ids = [...new Set(itemIds)];
+    if (ids.length === 0) return out;
+    const [floors, sales] = await Promise.all([
+      this.db.$queryRaw<{ id: string; floor: number }[]>`
+        SELECT "itemDefinitionId" AS id, ROUND(MIN("priceCents"::numeric / "quantity"))::int AS floor
+        FROM "MarketplaceListing"
+        WHERE "status" = 'ACTIVE' AND "itemDefinitionId" IN (${Prisma.join(ids)})
+        GROUP BY "itemDefinitionId"`,
+      this.db.$queryRaw<{ id: string; last: number }[]>`
+        SELECT DISTINCT ON (l."itemDefinitionId") l."itemDefinitionId" AS id, ROUND(t."priceCents"::numeric / l."quantity")::int AS last
+        FROM "MarketplaceTransaction" t
+        JOIN "MarketplaceListing" l ON l."id" = t."listingId"
+        WHERE l."itemDefinitionId" IN (${Prisma.join(ids)})
+        ORDER BY l."itemDefinitionId", t."createdAt" DESC`,
+    ]);
+    for (const id of ids) out.set(id, { floorCents: null, lastSaleCents: null });
+    for (const f of floors) out.get(f.id)!.floorCents = f.floor;
+    for (const s of sales) out.get(s.id)!.lastSaleCents = s.last;
+    return out;
+  }
+
+  private async withMarketStats(rows: ListingRow[]): Promise<ListingDTO[]> {
+    const stats = await this.marketStats(rows.map((r) => r.itemDefinitionId));
+    return rows.map((r) => toListingDTO(r, stats.get(r.itemDefinitionId)));
   }
 
   async myListings(userId: string): Promise<ListingDTO[]> {
@@ -72,7 +104,7 @@ export class MarketplaceService {
       orderBy: { createdAt: 'desc' },
       include: listingInclude,
     });
-    return rows.map(toListingDTO);
+    return this.withMarketStats(rows);
   }
 
   async history(userId: string): Promise<TransactionDTO[]> {

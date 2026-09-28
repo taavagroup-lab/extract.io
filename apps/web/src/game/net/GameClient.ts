@@ -115,6 +115,21 @@ export interface Notice {
   text: string;
 }
 
+export interface KingpinAlert {
+  id: number;
+  at: number;
+  playerId: number;
+  name: string;
+  bagCents: number;
+  /** The local player is the KINGPIN. */
+  self: boolean;
+}
+
+export interface ExtractInterrupt {
+  at: number;
+  reason: string;
+}
+
 export interface HudState {
   status: ClientStatus;
   error: string | null;
@@ -139,11 +154,19 @@ export interface HudState {
   hurts: { id: number; at: number; angle: number }[];
   /** Magazine including locally predicted shots (null = no weapon). */
   mag: number | null;
+  /** Last KINGPIN announcement (shown for a few seconds). */
+  kingpin: KingpinAlert | null;
+  /** Last extraction interruption (big red feedback). */
+  extractInterrupt: ExtractInterrupt | null;
+  /** When the (server-reported) bag value last went up, and by how much. */
+  bagGainAt: number;
+  bagGain: number;
 }
 
 /** Events for renderer / audio (server events + purely local predictions). */
 export type FxEvent =
   | Extract<GameEvent, { e: 'dmg' } | { e: 'hurt' } | { e: 'extractAlert' } | { e: 'kill' } | { e: 'loot' } | { e: 'announce' } | { e: 'extract' }>
+  | Extract<GameEvent, { e: 'kingpin' }>
   | { e: 'localShot'; weaponId: WeaponId }
   | { e: 'dryFire' }
   | { e: 'dash' };
@@ -232,6 +255,10 @@ export class GameClient {
   private extractAlertAt = 0;
   private hurtAt = 0;
   private interactHint: string | null = null;
+  private kingpin: KingpinAlert | null = null;
+  private extractInterrupt: ExtractInterrupt | null = null;
+  private bagGainAt = 0;
+  private bagGain = 0;
   private lobby: LobbyState | null = null;
   private death: DeathSummary | null = null;
   private extracted: ExtractionSummary | null = null;
@@ -346,6 +373,14 @@ export class GameClient {
     this.toasts = expire(this.toasts, 3600);
     this.notices = expire(this.notices, 2600);
     this.hurts = expire(this.hurts, 1200);
+    if (this.kingpin && now - this.kingpin.at > 5200) {
+      this.kingpin = null;
+      this.hudDirty = true;
+    }
+    if (this.extractInterrupt && now - this.extractInterrupt.at > 2200) {
+      this.extractInterrupt = null;
+      this.hudDirty = true;
+    }
     if (lens !== this.feed.length + this.announcements.length + this.toasts.length + this.notices.length + this.hurts.length) this.hudDirty = true;
     if (!this.hudDirty) return;
     this.hudDirty = false;
@@ -376,6 +411,10 @@ export class GameClient {
       hurtAt: this.hurtAt,
       hurts: this.hurts,
       mag: this.displayMag(),
+      kingpin: this.kingpin,
+      extractInterrupt: this.extractInterrupt,
+      bagGainAt: this.bagGainAt,
+      bagGain: this.bagGain,
     };
   }
 
@@ -721,6 +760,11 @@ export class GameClient {
   }
 
   private reconcile(self: SelfState, ack: number): void {
+    const prevBag = this.self?.bagValue;
+    if (prevBag !== undefined && self.bagValue > prevBag) {
+      this.bagGainAt = performance.now();
+      this.bagGain = self.bagValue - prevBag;
+    }
     this.self = self;
     for (const seq of this.pendingShots.keys()) if (seq <= ack) this.pendingShots.delete(seq);
     if (!this.world) return;
@@ -849,10 +893,16 @@ export class GameClient {
         this.notices = [...this.notices.slice(-3), { id: this.uid++, at: now, text: ev.text }];
         break;
       case 'extract':
-        this.notices = [
-          ...this.notices.slice(-3),
-          { id: this.uid++, at: now, text: ev.state === 'started' ? 'Extraction started — hold position' : `Extraction cancelled · ${ev.reason ?? ''}` },
-        ];
+        if (ev.state === 'started') {
+          this.extractInterrupt = null;
+          this.notices = [...this.notices.slice(-3), { id: this.uid++, at: now, text: 'Extraction started — hold position' }];
+        } else {
+          this.extractInterrupt = { at: now, reason: ev.reason ?? 'Interrupted' };
+        }
+        this.fx.push(ev);
+        break;
+      case 'kingpin':
+        this.kingpin = { id: this.uid++, at: now, playerId: ev.playerId, name: ev.name, bagCents: ev.bagCents, self: ev.playerId === this.playerId };
         this.fx.push(ev);
         break;
       case 'extractAlert':

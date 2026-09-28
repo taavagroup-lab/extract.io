@@ -87,6 +87,7 @@ export class Labels {
       l.armor.style.width = `${Math.min(100, armor)}%`;
       l.tag.textContent = tag ?? '';
       l.tag.style.display = tag ? '' : 'none';
+      l.tag.classList.toggle('is-kingpin', tag === 'KINGPIN');
     }
     this.place(l.el, this.project(camera, x, 64, z));
   }

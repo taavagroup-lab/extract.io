@@ -1,6 +1,7 @@
 import { WEAPONS, getItemDef } from '@extract/game-config';
 import type { ItemStack } from '@extract/game-types';
-import { formatCents, stackValue } from '@extract/shared';
+import { stackValue } from '@extract/shared';
+import { Usdc } from '../../components/Brand';
 import { Button, ItemIcon, RarityBadge } from '@extract/ui';
 import { useState } from 'react';
 import type { GameClient, HudState } from '../net/GameClient';
@@ -44,7 +45,7 @@ export function InventoryOverlay({ client, hud, onClose }: { client: GameClient;
         <header className="overlay__header">
           <h2>INVENTORY</h2>
           <span className="inv-value">
-            BAG VALUE <b>{formatCents(s?.bagValue ?? 0)}</b>
+            BAG VALUE <b><Usdc cents={s?.bagValue ?? 0} /></b>
           </span>
           <button className="overlay__close" onClick={onClose} aria-label="Close inventory">
             ×
@@ -98,7 +99,7 @@ export function InventoryOverlay({ client, hud, onClose }: { client: GameClient;
                   </div>
                   <p>{def.metadata.description}</p>
                   <p className="inv-detail__value">
-                    Est. value {formatCents(selectedStack ? stackValue(selectedStack) : def.metadata.starter ? 0 : def.estimatedValue)}
+                    Est. value <Usdc cents={selectedStack ? stackValue(selectedStack) : def.metadata.starter ? 0 : def.estimatedValue} />
                   </p>
                   <div className="inv-actions">
                     {sel?.kind === 'bag' && def.type === 'CONSUMABLE' && (

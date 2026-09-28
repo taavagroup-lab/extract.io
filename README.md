@@ -1,8 +1,10 @@
-# EXTRACT.IO
+# EXTRACT.SOL
 
-**100 Players. 10 Minutes. Loot. Kill. Extract. Whatever you escape with is yours.**
+**100 PLAYERS. 10 MINUTES. ONE WAY OUT.** — *Get in. Get the bag. Get out.*
 
-Browser-Multiplayer-Extraction-Shooter (Top-Down 2D): Loot sammeln, andere Spieler bekämpfen, rechtzeitig extrahieren. Extrahierter Loot landet im persistenten Account-Inventar und kann auf einem internen Marketplace (TEST USDC) gehandelt werden.
+Browser-Multiplayer-Extraction-Shooter (Top-Down 3D): Loot sammeln, andere Spieler bekämpfen, rechtzeitig extrahieren. Extrahierter Loot landet im persistenten Account-Inventar und kann auf dem internen Market (TEST USDC) gehandelt werden.
+
+**Branding:** Marke/Social `EXTRACT.SOL`, Community-Identität `$EXTRACT` (Platzhalter, *kein* handelbarer Token), Web-Game unter `extract.io`, Referenzwährung USDC (aktuell **TEST USDC**). Technische Namen (Packages `@extract/*`, DB, Protokoll) bleiben bewusst unverändert; Marken-Copy liegt zentral in `packages/game-config/src/brand.ts`.
 
 - **Client:** React + Vite + Three.js – 3D von oben (leicht geneigte Kamera), Echtzeit-Schatten, Bloom; Client-Prediction, Server-Reconciliation, Interpolation
 - **Game Server:** Node.js + TypeScript + `ws`, server-autoritativ, 30 Ticks/s, Interest Management, Delta-Updates
@@ -69,6 +71,11 @@ pnpm install
 | `DEV_TOOLS` | `true` | Dev-Panel + `/dev/*`-Endpoints (in Production immer aus) |
 | `ALLOW_ANONYMOUS_PLAY` | `true` | WebSocket-Join ohne Account (Load-Tests; in Production immer aus) |
 | `BLOCKCHAIN_PROVIDER` | `mock` | `mock` \| `solana` (Future-Stub, schlägt bewusst fehl) |
+| `GAME_SERVER_STATUS_URL` | *(aus `GAME_SERVER_URL`)* | Quelle für ONLINE PLAYERS / ACTIVE RAIDS im Menü (`GET /status` am Game Server) |
+| `CURRENCY_MODE` | `TEST` | `TEST` zeigt jeden Betrag als „… TEST USDC“; `LIVE` (`$`) wird ignoriert, solange `BLOCKCHAIN_PROVIDER=mock` |
+| `TOKEN_FEATURE_ENABLED` | `true` | blendet die dezente `$EXTRACT`-Sektion ein/aus |
+| `TOKEN_STATUS` | `COMING_SOON` | `COMING_SOON` \| `COMMUNITY` (kein Preis, kein Market Cap, keine Holder – by design) |
+| `TOKEN_SYMBOL` / `TOKEN_CHAIN` | `$EXTRACT` / `Solana` | Anzeige der Community-Identität |
 | `VITE_API_URL` / `VITE_GAME_SERVER_URL` | *(optional)* | nur nötig, wenn der Client nicht über den Vite-Proxy läuft |
 
 ## Database Setup
@@ -93,6 +100,15 @@ pnpm db:migrate       # Entwicklung: Schema geändert -> neue Migration erzeugen
 pnpm db:studio        # Prisma Studio
 ```
 Die Item-Definitionen in `packages/game-config/src/items.ts` sind die Quelle der Wahrheit; `db:seed` spiegelt sie in die DB (idempotent). `SEED_DEMO_MARKET=false` überspringt die Demo-Listings.
+
+**Migrationen**
+
+| Migration | Inhalt |
+|---|---|
+| `20260927111058_init` | Grundschema inkl. CHECK-Constraints |
+| `20260928120000_presentation_stats` | additiv: Enum `LeaderboardCategory` + `SEASON_XP`, `KINGPIN_EXTRACTIONS`; `MatchPlayer.xp`; `PlayerProfile.legendaryExtracted`, `kingpinExtractions`, `totalXp`, `totalPlaytimeSec`. Backfill: Spielzeit aus vorhandenen Match-Ergebnissen; XP/Legendary/Kingpin starten bei 0 (nicht rekonstruierbar, daher nicht erfunden). Benötigt PostgreSQL ≥ 12. |
+
+Bestehende Dev-Daten bleiben erhalten: `pnpm db:deploy` genügt.
 
 ## Run Development
 
@@ -132,6 +148,10 @@ pnpm dev:api
 **Spielgefühl:** Schüsse werden lokal vorhergesagt (Mündungsblitz, Rückstoß, Leuchtspur und Munition reagieren sofort; Treffer entscheidet der Server), Fadenkreuz mit Hitmarker/Kill-Marker, Treffer-Richtungsanzeige, Low-HP-Puls, prozeduraler Sound (Waffen, Treffer, Pickups nach Rarity, Extraction-Countdown, Herzschlag) – alles ohne Asset-Dateien. „Auto“-Grafik passt Auflösung, Bloom und Schatten an die Framerate an.
 
 Ablauf: Loot-Phase (0–2 min) → Combat-Phase (2–7 min, *The Vault* öffnet) → Extraction-Phase (7–10 min, 3 Extraction-Punkte aktiv, 10 s in der Zone bleiben). Wer bei 10:00 nicht extrahiert ist, behält nur den Secure-Slot.
+
+**Bag Value & Threat:** Das HUD zeigt jederzeit den serverseitig berechneten Wert der Tasche (feste Schätzwerte aus `items.ts`) und die Bedrohungsstufe `NORMAL → HIGH VALUE → WANTED → KINGPIN` (Schwellen in `packages/game-config/src/threat.ts`). Ab KINGPIN wird die ungefähre Position periodisch auf der Karte aller Spieler angezeigt („KINGPIN DETECTED“); abschaltbar über `THREAT_CONFIG.kingpinReveal.enabled`. Ein Pfeil unter dem Timer zeigt Richtung und Distanz zur nächsten offenen Extraction.
+
+**Nach dem Raid:** „EXTRACTION SUCCESSFUL / BAG SECURED“ mit Bag Value, Rarity-Zählern und Season-XP (serverseitig, `packages/game-config/src/progression.ts`). **SHARE RESULT** erzeugt im Browser eine 1200×675-Karte (Download / Kopieren) und öffnet einen X-Post per Web-Intent – im TEST-Modus immer mit „TEST USDC“ und Hinweis auf die Test-Ökonomie. Vor dem allerersten Raid erscheint einmalig ein kurzes Briefing (LOOT. KILL. EXTRACT.).
 
 ### Zwei Spieler lokal testen (Browser 1 + Browser 2)
 

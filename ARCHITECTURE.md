@@ -1,4 +1,4 @@
-# EXTRACT.IO – Architektur
+# EXTRACT.SOL – Architektur
 
 > 100 Players. 10 Minutes. Loot. Kill. Extract. Whatever you escape with is yours.
 
@@ -89,6 +89,8 @@ Der Game-Server kennt nur das Interface `GamePersistence`. `PrismaPersistence` i
 - Tod: Secure-Slot bleibt; vom Rest werden zufällige Einheiten bis max. 30 % des Werts gesichert, die unerreichbare Differenz wird als TEST-USDC-„Insurance“ ausgezahlt, ≥ 70 % droppen als Loot.
 - Bounty ab 5 Kills ($5, $8, $12, $18, danach ×1,5), ungefähre Position (±260) alle 5 s, Auszahlung an den Killer erst bei dessen Extraktion.
 - Supply Drops ab Minute 4, angekündigt, 10 s Fallzeit, überdurchschnittlicher Loot.
+- **Threat-Tiers** (`threat.ts`): NORMAL / HIGH VALUE ($10) / WANTED ($25) / KINGPIN ($50) auf Basis des serverseitigen Bag Value. `KingpinSystem` prüft alle 500 ms (nicht jeden Tick), setzt das Player-Flag `KINGPIN` (Nameplate + goldener Ring für Spieler in der Nähe), sendet einmalig `kingpin`-Events (mit Cooldown gegen Flackern) und veröffentlicht alle 15 s eine unscharfe Position (±320) im globalen Match-State. `kingpinReveal.enabled=false` macht KINGPIN rein kosmetisch.
+- **Season-XP** (`progression.ts`, `shared/progression.ts`): Überleben (1/s, max. 600), Kills (50), Bounty-Kills (100), Extraktion (+250, +10 pro 1 USDC, max. 3000). Nur der Game-Server berechnet XP und persistiert sie mit dem Match-Ergebnis (idempotent).
 
 ## API & Marketplace
 - Fastify + Zod-Validierung, JWT (HS256, geteilt mit Game-Server), Rate-Limits (strenger für Auth/Kauf), CORS.
@@ -100,6 +102,14 @@ Der Game-Server kennt nur das Interface `GamePersistence`. `PrismaPersistence` i
   4. `MarketplaceTransaction.listingId` und `.idempotencyKey` sind UNIQUE → Retry liefert die Originaltransaktion.
   5. Gebühr 5 % (500 bps, abgerundet): $100 → Verkäufer $95, Plattform $5.
 - Geld ist überall **Integer-Cent** (keine Float-Fehler).
+- **Market-Referenzpreise:** Floor (niedrigster aktiver Preis pro Einheit) und Last Sale (pro Einheit) werden pro Seite mit zwei gruppierten SQL-Queries für die sichtbaren Item-IDs geladen – keine N+1-Abfragen.
+- **Leaderboards:** paginiert (`page`, `pageSize` ≤ 50), stabile Ränge (`value DESC, updatedAt ASC`); der eigene Rang kommt aus einer einzigen indizierten Count-Query. Neue Kategorien `SEASON_XP` und `KINGPIN_EXTRACTIONS`.
+- **Öffentliche Config / Status:** `GET /config` liefert nur nicht-geheime Werte (Token-Identität, Währungsmodus). `GET /status` liest `/status` des Game-Servers (verbundene Menschen, laufende Raids; Bots zählen nicht), 5 s gecacht; ist der Game-Server nicht erreichbar, meldet die API „unbekannt“ – das Menü blendet die Zahlen dann aus statt zu raten.
+
+## Branding & Währung
+- Marke `EXTRACT.SOL`, Community `$EXTRACT`, Domain `extract.io`: Copy zentral in `game-config/src/brand.ts`, Komponenten `Wordmark`, `SeasonBadge`, `TokenBadge`, `Usdc` im Web. Interne Namespaces (`@extract/*`, Tabellen, Protokoll) bleiben unverändert.
+- `formatMoney` (shared) formatiert jeden Betrag nach `CURRENCY_MODE`: `TEST` → „84.72 TEST USDC“, `LIVE` → „$84.72“. Die API erzwingt `TEST`, solange der Mock-Provider aktiv ist. Share-Karte und X-Text nutzen dieselbe Funktion.
+- `$EXTRACT` ist ausschließlich eine Identitäts-/Community-Anzeige (`COMING_SOON`/`COMMUNITY`); es gibt bewusst keinen Preis, Market Cap, Holder-Count oder Handel.
 
 ## Blockchain-Abstraktion
 Game-Logic importiert kein Chain-SDK. Die API nutzt `BlockchainProvider` (`connectWallet`, `getBalance`, `mintItem`, `transferItem`, `burnItem`, `getAssetOwner`) über eine Factory (`BLOCKCHAIN_PROVIDER=mock|solana`). `MockBlockchainProvider` verhält sich wie eine echte Chain (Ownership-Checks), ist aber In-Memory. `SolanaBlockchainProvider` ist ein klar markierter Future-Stub, der beim Auswählen sofort fehlschlägt statt still zu „funktionieren“. On-Chain-Felder am Item (`blockchainAssetId`, `mintAddress`, `tokenId`, `chain`, `ownerWallet`) sind nullable. Wallet ist optional.
@@ -113,6 +123,7 @@ Game-Logic importiert kein Chain-SDK. Die API nutzt `BlockchainProvider` (`conne
 - **Kamera:** Perspektive, 15° geneigt, folgt weich mit leichtem Vorausblick zum Fadenkreuz. Sichtbare Fläche bleibt ≤ 1600×1000 Einheiten (fair, egal wie groß der Monitor ist). Zielen per Raycast auf die Waffenhöhe.
 - **Welt** (`MapBuilder3D`): Bodenflächen mit prozeduralen, welt-verankerten Kacheltexturen (Gras, Waldboden, Asphalt, Beton, Planken, Fliesen, Metall), Wände/Container/Maschinen als Boxen mit echter Höhe, pro Material zu einem Mesh gemerged; Bäume/Felsen als `InstancedMesh`. Baumkronen blenden per Shader-Injection rund um den eigenen Spieler aus.
 - **Licht:** Hemisphere + Sonne mit Schatten (Shadow-Kamera folgt der Sicht, auf Texel gesnappt), PBR-Umgebung (`RoomEnvironment`), ACES-Tonemapping, Bloom (nur HDR-Emissives: Visiere, Lichtsäulen, Leuchtspuren).
+- **Color-Grade-Pass** (`GradePass.ts`, ab MEDIUM, eine Fullscreen-Pass im linearen HDR vor dem Tonemapping): Vibrance (nur entsättigte Farben), Log-Kontrast, Split-Toning (kühle Schatten / warme Lichter nur für Neutraltöne), Vignette; Gameplay-Tints: niedrige HP entsättigen den Rand, Extraktion hebt die Ränder ins Grüne. Inspiriert vom Post-Stack von INKWAVE.
 - **Modelle:** Charaktere mit Skins (`skins.ts`, deterministisch pro Name), Outline, Laufzyklus, Rückstoß, Mündungsblitz, Treffer-Flash; Waffen pro Typ mit Rarity-Akzent; jedes Item mit eigenem 3D-Modell, Glow und ab Epic einer Lichtsäule; Kisten mit animiertem Deckel; Supply Drops fallen am Fallschirm.
 - **Effekte:** Leuchtspuren als instanziertes Mesh, gepoolte Funken-Sprites, Extraction-Zonen mit Lichtsäule und Partikeln.
 - **Labels** (Namen, HP, Schadenszahlen, Zonen) sind DOM-Elemente, die jedes Frame auf Weltpositionen projiziert werden – gestochen scharf.
@@ -121,7 +132,10 @@ Game-Logic importiert kein Chain-SDK. Die API nutzt `BlockchainProvider` (`conne
 - **Qualitätsstufen:** Low (0,75× Auflösung, kein Postprocessing) / Medium (MSAA) / High (Bloom, 2K-Schatten) / Ultra (volle Auflösung, 4K-Schatten); „Auto“ schaltet nach 3 s anhaltend langsamer Frames herunter und bei Reserve wieder hoch, Ausreißer (Tab-Wechsel) werden ignoriert.
 - **Audio:** `audio/SoundEngine.ts` synthetisiert alle Sounds mit der Web Audio API (Rauschen + Oszillatoren, Kompressor, Stereo-Panning, Entfernungsdämpfung, Voice-Limit).
 - **Hauptmenü:** Der Hintergrund ist die echte Karte in 3D mit Kameraflug (lazy geladen, respektiert `prefers-reduced-motion`).
-- `GameClient` = Netzwerk + Prediction + Interpolation, framework-agnostisch; React liest einen gedrosselten HUD-Snapshot (10 Hz) über `useSyncExternalStore`.
+- `GameClient` = Netzwerk + Prediction + Interpolation, framework-agnostisch; React liest einen gedrosselten HUD-Snapshot (10 Hz) über `useSyncExternalStore`. Das HUD hat keinen eigenen Frame-Ticker mehr (nur der Timer tickt mit 4 Hz); zeitlich begrenzte Effekte (Treffer-Vignette, Kill-Confirm, Toasts, KINGPIN-Banner, Extraction-Abbruch) sind CSS-Animationen, die per Event-ID neu starten.
+- **HUD** (`game/hud/`): `BagValue` (Wert + Threat-Tier + Fortschritt zur nächsten Stufe), `ExtractionHud` (Countdown-Ring, Abbruch-Feedback, Richtungs-Beacon zur nächsten offenen Zone), `Alerts` (KINGPIN, Bounty, Loot-Toasts „LEGENDARY ACQUIRED … + X TEST USDC BAG VALUE“).
+- **Post-Match:** `ResultScreens` + `share/shareCard.ts` (Canvas 1200×675, Fonts vorgeladen) + `ShareModal` (Download, Clipboard, X-Web-Intent ohne API).
+- **Menüs:** `Atmosphere` (Grid-Parallax, Glow folgt dem Zeiger per CSS-Variablen in einem rAF, Grain, Scanlines; aus bei `prefers-reduced-motion`), delegierte Hover-/Klick-Sounds (`uiSounds.ts`), einmaliges Briefing vor dem ersten Raid (`localStorage`).
 - Alle Assets sind prozedural erzeugt (keine Dateien) und über `textures.ts`, `style.ts`, `skins.ts` und die Modell-Factories austauschbar.
 - Die 3D-Engine wird per Code-Splitting erst beim Spielstart geladen.
 

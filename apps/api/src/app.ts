@@ -9,9 +9,10 @@ import { z, ZodError } from 'zod';
 import type { ApiConfig } from './config';
 import { AppError, unauthorized } from './errors';
 import { AuthService } from './services/AuthService';
-import { GameDataService } from './services/GameDataService';
+import { GameDataService, LEADERBOARD_MAX_PAGE_SIZE } from './services/GameDataService';
 import { InventoryService } from './services/InventoryService';
 import { MarketplaceService } from './services/MarketplaceService';
+import { StatusService } from './services/StatusService';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -25,6 +26,8 @@ export interface AppDeps {
   chain: BlockchainProvider;
   logger: Logger;
   analytics: AnalyticsBus;
+  /** Injected in tests; defaults to polling config.gameStatusUrl. */
+  status?: StatusService;
 }
 
 const usernameBody = z.object({ username: z.string() });
@@ -44,6 +47,8 @@ const listingQuery = z.object({
 const leaderboardQuery = z.object({
   category: z.enum(LEADERBOARD_CATEGORIES).default('MOST_KILLS'),
   period: z.enum(LEADERBOARD_PERIODS).default('ALL_TIME'),
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(LEADERBOARD_MAX_PAGE_SIZE).default(25),
 });
 const idParam = z.object({ id: z.string().min(1).max(64) });
 const walletBody = z.object({ address: z.string().min(32).max(64).optional() }).default({});
@@ -56,6 +61,7 @@ export async function buildApp(deps: AppDeps) {
   const marketplace = new MarketplaceService(db, logger, analytics);
   const inventory = new InventoryService(db, chain);
   const data = new GameDataService(db, chain);
+  const status = deps.status ?? new StatusService(config.gameStatusUrl);
 
   await app.register(cors, { origin: config.corsOrigins, credentials: false });
   await app.register(rateLimit, { max: config.rateLimitPerMinute, timeWindow: '1 minute' });
@@ -90,6 +96,8 @@ export async function buildApp(deps: AppDeps) {
   const strict = { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } };
 
   app.get('/health', async () => ({ ok: true }));
+  app.get('/config', async () => config.publicConfig);
+  app.get('/status', async () => status.status());
 
   // --- auth -----------------------------------------------------------------
   app.post('/auth/guest', strict, async (req) => auth.createGuest(usernameBody.parse(req.body).username));
@@ -127,7 +135,7 @@ export async function buildApp(deps: AppDeps) {
   // --- leaderboard / profile / season ----------------------------------------
   app.get('/leaderboard', async (req) => {
     const q = leaderboardQuery.parse(req.query);
-    return data.leaderboard(q.category, q.period);
+    return data.leaderboard(q.category, q.period, { page: q.page, pageSize: q.pageSize, userId: req.auth?.userId ?? null });
   });
   app.get('/profile', { preHandler: requireAuth }, async (req) => data.profile(userId(req)));
   app.get('/seasons/current', async () => data.currentSeason());

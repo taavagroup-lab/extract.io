@@ -42,6 +42,8 @@ export interface InventoryItemDTO {
   seasonName: string | null;
   serialNumber: number | null;
   maxSupply: number | null;
+  /** Limited items: how many serials have been extracted so far (null for unlimited items). */
+  discovered: number | null;
   status: InventoryItemStatus;
   blockchain: BlockchainInfoDTO | null;
 }
@@ -63,6 +65,13 @@ export interface ListingDTO {
   serialNumber: number | null;
   maxSupply: number | null;
   createdAt: string;
+  seasonName: string | null;
+  /** Limited items: serials still undiscovered (null when unlimited). */
+  remainingSupply: number | null;
+  /** Lowest active asking price per unit for this item (null when unknown). */
+  floorCents: Cents | null;
+  /** Price per unit of the most recent completed sale of this item. */
+  lastSaleCents: Cents | null;
 }
 
 export type ListingSort = 'price_asc' | 'price_desc' | 'newest' | 'rarity';
@@ -103,6 +112,8 @@ export const LEADERBOARD_CATEGORIES = [
   'HIGHEST_SINGLE_EXTRACTION',
   'HIGHEST_KILL_STREAK',
   'BOUNTY_KILLS',
+  'SEASON_XP',
+  'KINGPIN_EXTRACTIONS',
 ] as const;
 export type LeaderboardCategory = (typeof LEADERBOARD_CATEGORIES)[number];
 
@@ -121,6 +132,12 @@ export interface LeaderboardDTO {
   period: LeaderboardPeriod;
   periodKey: string;
   rows: LeaderboardRowDTO[];
+  page: number;
+  pageSize: number;
+  /** Ranked players in this board (value > 0). */
+  total: number;
+  /** The requesting player's row, when signed in and ranked. */
+  me: LeaderboardRowDTO | null;
 }
 
 export interface PlayerStatsDTO {
@@ -128,11 +145,29 @@ export interface PlayerStatsDTO {
   totalKills: number;
   totalDeaths: number;
   totalExtractions: number;
+  /** Runs that ended without extracting (death, timeout, quit). */
+  failedExtractions: number;
   totalLootExtractedCents: Cents;
   highestSingleExtractionCents: Cents;
   highestKillStreak: number;
   bountyKills: number;
   bountyEarnedCents: Cents;
+  /** LEGENDARY + MYTHIC units that made it out (tracked since the stat was introduced). */
+  legendaryExtracted: number;
+  /** Extractions with a KINGPIN-tier bag. */
+  kingpinExtractions: number;
+  totalXp: number;
+  /** Time spent inside raids, in ms. */
+  playtimeMs: number;
+}
+
+export interface SeasonStandingDTO {
+  seasonId: string;
+  seasonName: string;
+  xp: number;
+  /** Rank on the SEASON_XP board, null while unranked. */
+  rank: number | null;
+  rankedPlayers: number;
 }
 
 export interface MatchHistoryDTO {
@@ -142,13 +177,36 @@ export interface MatchHistoryDTO {
   lootValueCents: Cents;
   securedValueCents: Cents;
   survivedMs: number;
+  xp: number;
   createdAt: string;
 }
 
 export interface ProfileDTO {
   user: UserDTO;
   stats: PlayerStatsDTO;
+  season: SeasonStandingDTO | null;
   recentMatches: MatchHistoryDTO[];
+}
+
+/** Public, non-secret runtime configuration (GET /config). */
+export interface PublicConfigDTO {
+  token: {
+    enabled: boolean;
+    status: 'COMING_SOON' | 'COMMUNITY';
+    symbol: string;
+    chain: string;
+  };
+  currency: {
+    code: string;
+    mode: 'TEST' | 'LIVE';
+  };
+}
+
+/** Live population from the game server (GET /status). Null values = unknown, never guessed. */
+export interface ServerStatusDTO {
+  available: boolean;
+  onlinePlayers: number | null;
+  activeMatches: number | null;
 }
 
 export interface SeasonItemDTO {

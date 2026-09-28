@@ -1,12 +1,13 @@
 import { MockBlockchainProvider } from '@extract/blockchain';
 import { MatchResultRepository, PrismaClient } from '@extract/database';
-import { ECONOMY_CONFIG } from '@extract/game-config';
-import type { AuthResponse, InventoryItemDTO, ListingDTO, TransactionDTO } from '@extract/game-types';
+import { CURRENCY_DEFAULTS, ECONOMY_CONFIG, TOKEN_DEFAULTS } from '@extract/game-config';
+import type { AuthResponse, InventoryItemDTO, LeaderboardDTO, ListingDTO, ProfileDTO, TransactionDTO } from '@extract/game-types';
 import { AnalyticsBus, MemoryAnalyticsSink, loadRootEnv } from '@extract/server-core';
 import { randomBytes, randomUUID } from 'node:crypto';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
+import { StatusService } from '../src/services/StatusService';
 import { testDatabaseUrl } from './testDb';
 
 loadRootEnv();
@@ -47,7 +48,11 @@ describe.skipIf(!hasDb)('API integration (PostgreSQL)', () => {
         production: false,
         rateLimitPerMinute: 100_000,
         trustProxy: false,
+        gameStatusUrl: null,
+        publicConfig: { token: { ...TOKEN_DEFAULTS }, currency: { ...CURRENCY_DEFAULTS } },
+        warnings: [],
       },
+      status: new StatusService('http://game.test/status', 0, 500, async () => Response.json({ onlinePlayers: 3, activeMatches: 1 })),
       db,
       chain: new MockBlockchainProvider(),
       logger: pino({ level: 'silent' }),
@@ -72,14 +77,14 @@ describe.skipIf(!hasDb)('API integration (PostgreSQL)', () => {
     (await app.inject({ method: 'GET', url: '/inventory', headers: authed(a) })).json();
 
   /** Grants items through the real extraction persistence path. */
-  const extract = async (userId: string, items: { itemId: string; qty: number }[]) => {
+  const extract = async (userId: string, items: { itemId: string; qty: number }[], opts: { value?: number; xp?: number } = {}) => {
     const matchId = `test_${randomUUID()}`;
     await repo.createMatch({ matchId, seasonId: 'season-1', mapId: 'genesis_isle', startedAt: new Date() });
-    const value = 1000;
+    const value = opts.value ?? 1000;
     const input = {
       matchId, userId, seasonId: 'season-1', outcome: 'EXTRACTED' as const, kills: 3, damageDealt: 120, survivedMs: 400_000,
       lootValueCents: value, securedValueCents: value, lostValueCents: 0, bountyEarnedCents: 0, bountyKills: 0, payoutCents: 0,
-      items, extraction: { pointId: 'ex_nw', valueCents: value },
+      items, extraction: { pointId: 'ex_nw', valueCents: value }, xp: opts.xp ?? 0,
     };
     return { matchId, input, result: await repo.savePlayerResult(input) };
   };
@@ -258,6 +263,99 @@ describe.skipIf(!hasDb)('API integration (PostgreSQL)', () => {
     expect(minted.statusCode).toBe(200);
     expect(minted.json().blockchain.mintAddress).toBeTruthy();
     expect(minted.json().blockchain.ownerWallet).toBe(wallet.json().address);
+  });
+
+  it('profile: truthful meta stats (legendary, KINGPIN, XP, playtime, season rank)', async () => {
+    const a = await guest();
+    // Crown (MYTHIC) + katana (LEGENDARY): a KINGPIN-tier bag.
+    await extract(a.user.id, [{ itemId: 'genesis_crown', qty: 1 }, { itemId: 'cyber_katana', qty: 1 }, { itemId: 'scrap', qty: 5 }], { value: 29_305, xp: 1_234 });
+    const matchId = `test_${randomUUID()}`;
+    await repo.createMatch({ matchId, seasonId: 'season-1', mapId: 'genesis_isle', startedAt: new Date() });
+    await repo.savePlayerResult({
+      matchId, userId: a.user.id, seasonId: 'season-1', outcome: 'DIED', kills: 1, damageDealt: 40, survivedMs: 30_500,
+      lootValueCents: 200, securedValueCents: 60, lostValueCents: 140, bountyEarnedCents: 0, bountyKills: 0, payoutCents: 0,
+      items: [], extraction: null, xp: 80,
+    });
+
+    const profile: ProfileDTO = (await app.inject({ method: 'GET', url: '/profile', headers: authed(a) })).json();
+    expect(profile.stats.totalMatches).toBe(2);
+    expect(profile.stats.totalExtractions).toBe(1);
+    expect(profile.stats.failedExtractions).toBe(1);
+    expect(profile.stats.legendaryExtracted).toBe(2);
+    expect(profile.stats.kingpinExtractions).toBe(1);
+    expect(profile.stats.totalXp).toBe(1_234 + 80);
+    expect(profile.stats.playtimeMs).toBe(400_000 + 30_000);
+    expect(profile.season?.xp).toBe(1_314);
+    expect(profile.season?.rank).toBeGreaterThanOrEqual(1);
+    expect(profile.season!.rankedPlayers).toBeGreaterThanOrEqual(profile.season!.rank!);
+    expect(profile.recentMatches.map((m) => m.xp).sort((x, y) => x - y)).toEqual([80, 1_234]);
+  });
+
+  it("leaderboards: pagination, stable ranks and the caller's own rank", async () => {
+    const users = [await guest(), await guest(), await guest()];
+    const xp = [3_000_000, 2_000_000, 1_000_000];
+    for (let i = 0; i < users.length; i++) await extract(users[i]!.user.id, [], { xp: xp[i]! });
+
+    const get = async (q: string, a?: AuthResponse): Promise<LeaderboardDTO> =>
+      (await app.inject({ method: 'GET', url: `/leaderboard?category=SEASON_XP&period=SEASON&${q}`, headers: a ? authed(a) : {} })).json();
+
+    const me = await Promise.all(users.map((u) => get('page=1&pageSize=1', u)));
+    const ranks = me.map((m) => m.me!.rank);
+    expect(ranks[0]).toBeLessThan(ranks[1]!);
+    expect(ranks[1]).toBeLessThan(ranks[2]!);
+    expect(me[2]!.me?.value).toBe(1_000_000);
+
+    const page1 = await get('page=1&pageSize=2');
+    expect(page1.rows).toHaveLength(2);
+    expect(page1.pageSize).toBe(2);
+    expect(page1.total).toBeGreaterThanOrEqual(3);
+    expect(page1.me).toBeNull();
+    const page2 = await get('page=2&pageSize=2');
+    expect(page2.rows[0]?.rank).toBe(3);
+    const byRank = await get(`page=${ranks[1]}&pageSize=1`);
+    expect(byRank.rows[0]?.userId).toBe(users[1]!.user.id);
+
+    expect((await app.inject({ method: 'GET', url: '/leaderboard?category=SEASON_XP&pageSize=500' })).statusCode).toBe(400);
+  });
+
+  it('market listings carry season, remaining supply, floor and last sale', async () => {
+    const seller = await guest();
+    const buyer = await guest();
+    await extract(seller.user.id, [{ itemId: 'rare_skin_fragment', qty: 3 }, { itemId: 'genesis_crown', qty: 1 }]);
+    const inv = await inventory(seller);
+    const frag = inv.find((i) => i.itemId === 'rare_skin_fragment')!;
+    const crown = inv.find((i) => i.itemId === 'genesis_crown')!;
+    expect(crown.discovered).toBeGreaterThanOrEqual(crown.serialNumber!);
+    expect(frag.discovered).toBeNull();
+
+    const cheap: ListingDTO = (await list(seller, frag.id, 2, 600)).json(); // 3.00 per unit
+    const rest = (await inventory(seller)).find((i) => i.itemId === 'rare_skin_fragment' && i.status === 'OWNED')!;
+    const sold: ListingDTO = (await list(seller, rest.id, 1, 450)).json();
+    expect((await buy(buyer, sold.id)).statusCode).toBe(200);
+
+    const search = (await app.inject({ method: 'GET', url: '/marketplace/listings?search=skin%20fragment&sort=newest&pageSize=100' })).json();
+    const row: ListingDTO = search.items.find((l: ListingDTO) => l.id === cheap.id);
+    expect(row.floorCents).not.toBeNull();
+    expect(row.floorCents!).toBeLessThanOrEqual(300);
+    expect(row.lastSaleCents).toBe(450);
+    expect(row.seasonName).toBe('THE GENESIS');
+    expect(row.remainingSupply).toBeNull();
+
+    const crownListing: ListingDTO = (await list(seller, crown.id, 1, 99_999)).json();
+    const crownRow: ListingDTO = (await app.inject({ method: 'GET', url: '/marketplace/listings?search=genesis&sort=newest&pageSize=100' }))
+      .json()
+      .items.find((l: ListingDTO) => l.id === crownListing.id);
+    expect(crownRow.remainingSupply).toBe(1000 - crown.discovered!);
+    expect(crownRow.serialNumber).toBe(crown.serialNumber);
+  });
+
+  it('public config and live status never invent numbers', async () => {
+    const cfg = (await app.inject({ method: 'GET', url: '/config' })).json();
+    expect(cfg.currency).toEqual({ code: 'USDC', mode: 'TEST' });
+    expect(cfg.token.symbol).toBe('$EXTRACT');
+    expect(cfg.token).not.toHaveProperty('price');
+    const status = (await app.inject({ method: 'GET', url: '/status' })).json();
+    expect(status).toEqual({ available: true, onlinePlayers: 3, activeMatches: 1 });
   });
 
   it('season endpoint exposes limited supply', async () => {

@@ -1,5 +1,6 @@
 import { Button } from '@extract/ui';
 import { useEffect, useMemo, useState } from 'react';
+import { Briefing, hasSeenBriefing } from '../game/hud/Briefing';
 import { DevPanel } from '../game/hud/DevPanel';
 import { GameMenu } from '../game/hud/GameMenu';
 import { Hud } from '../game/hud/Hud';
@@ -66,11 +67,11 @@ function GameView({ client, onPlayAgain }: { client: GameClient; onPlayAgain: ()
           }}
         />
       )}
-      {!finished && overlay === 'none' && <button className="menu-fab" onClick={() => setOverlay('menu')} aria-label="Menu">ESC</button>}
+      {!finished && overlay === 'none' && <button className="menu-fab" onClick={() => setOverlay('menu')} aria-label="Menu">ESC · MENU</button>}
       {!finished && dev && hud.devTools && <DevPanel client={client} onClose={() => setDev(false)} />}
       {hud.status === 'reconnecting' && <div className="reconnecting">CONNECTION LOST · RECONNECTING…</div>}
       {hud.status === 'dead' && hud.death && <DeathScreen d={hud.death} {...actions} />}
-      {hud.status === 'extracted' && hud.extracted && <ExtractedScreen x={hud.extracted} {...actions} />}
+      {hud.status === 'extracted' && hud.extracted && <ExtractedScreen x={hud.extracted} playerName={hud.playerName} {...actions} />}
       {hud.status === 'ended' && hud.end && <MatchEndScreen r={hud.end} {...actions} />}
     </div>
   );
@@ -80,12 +81,15 @@ export function PlayPage() {
   const { token, user } = useStore(session);
   const [round, setRound] = useState(0);
   const [client, setClient] = useState<GameClient | null>(null);
+  const [briefed, setBriefed] = useState(hasSeenBriefing);
 
   useEffect(() => {
     if (!token) {
       navigate('menu');
       return;
     }
+    // First raid: explain the loop before joining a lobby (no connection yet).
+    if (!briefed) return;
     const c = new GameClient(token, user?.username ?? 'Guest');
     c.connect();
     setClient(c);
@@ -94,8 +98,15 @@ export function PlayPage() {
       setClient(null);
     };
     // The session user object changes on balance refresh; only token/round start a new client.
-  }, [token, round]);
+  }, [token, round, briefed]);
 
+  if (!briefed) {
+    return (
+      <div className="play-page">
+        <Briefing onEnter={() => setBriefed(true)} />
+      </div>
+    );
+  }
   return <div className="play-page">{client && <PlayInner client={client} onPlayAgain={() => setRound((r) => r + 1)} />}</div>;
 }
 
@@ -103,9 +114,9 @@ function PlayInner({ client, onPlayAgain }: { client: GameClient; onPlayAgain: (
   const hud = useHud(client);
   if (hud.status === 'error') {
     return (
-      <div className="matchmaking">
-        <div className="mm-card">
-          <p className="mm-kicker">CONNECTION</p>
+      <div className="raid-screen">
+        <div className="raid-card">
+          <p className="x-kicker">CONNECTION</p>
           <p className="mm-error">{hud.error}</p>
           <div className="result-actions">
             <Button variant="primary" onClick={onPlayAgain}>

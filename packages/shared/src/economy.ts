@@ -1,5 +1,5 @@
 import { ECONOMY_CONFIG, getItemDef } from '@extract/game-config';
-import type { ItemStack, WeaponInstance } from '@extract/game-types';
+import type { ItemStack, Rarity, WeaponInstance } from '@extract/game-types';
 
 export interface FeeBreakdown {
   priceCents: number;
@@ -43,6 +43,29 @@ export function weaponValue(w: WeaponInstance | null | undefined): number {
   if (!w) return 0;
   const def = getItemDef(w.itemId);
   return def.metadata.starter ? 0 : def.estimatedValue;
+}
+
+export interface ItemSummary {
+  valueCents: number;
+  /** Units per rarity. */
+  rarityCounts: Partial<Record<Rarity, number>>;
+  units: number;
+}
+
+/** Deterministic value + rarity breakdown of a list of item amounts (configured estimated values). */
+export function summarizeItems(items: readonly Pick<ItemStack, 'itemId' | 'qty'>[]): ItemSummary {
+  const rarityCounts: Partial<Record<Rarity, number>> = {};
+  let valueCents = 0;
+  let units = 0;
+  for (const i of items) {
+    if (i.qty <= 0) continue;
+    const def = getItemDef(i.itemId);
+    if (def.metadata.starter) continue;
+    valueCents += def.estimatedValue * i.qty;
+    units += i.qty;
+    rarityCounts[def.rarity] = (rarityCounts[def.rarity] ?? 0) + i.qty;
+  }
+  return { valueCents, rarityCounts, units };
 }
 
 /** Value of everything a player carries (bag + secure slot + non-starter weapons). */

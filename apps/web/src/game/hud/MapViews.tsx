@@ -51,6 +51,7 @@ export function MapOverlay({ client, onClose }: { client: GameClient; onClose: (
             <span><i className="dot dot--extract" /> Extraction</span>
             <span><i className="dot dot--supply" /> Supply drop</span>
             <span><i className="dot dot--bounty" /> Bounty (approx.)</span>
+            <span><i className="dot dot--kingpin" /> Kingpin (approx.)</span>
             <span><i className="dot dot--vault" /> High value zone</span>
           </div>
           <button className="overlay__close" onClick={onClose} aria-label="Close map">

@@ -1,10 +1,17 @@
-import { PHASE_LABELS, RARITY_CONFIG, WEAPONS, getItemDef, MATCH_CONFIG } from '@extract/game-config';
-import { formatCents, formatClock } from '@extract/shared';
+import { MATCH_CONFIG, PHASE_LABELS, WEAPONS, getItemDef } from '@extract/game-config';
+import { formatClock } from '@extract/shared';
 import { ItemIcon } from '@extract/ui';
+import { Usdc } from '../../components/Brand';
 import type { GameClient, HudState } from '../net/GameClient';
+import { BountyBanner, KingpinBanner, LootToasts } from './Alerts';
+import { BagValue } from './BagValue';
+import { ExtractBeacon, ExtractionInterrupted, ExtractionProgress } from './ExtractionHud';
 import { Minimap } from './MapViews';
 import { useTicker } from './useHud';
 
+const EXTRACTION_OPENS_AT = MATCH_CONFIG.phases.find((p) => p.phase === 'EXTRACTION_PHASE')!.startMs;
+
+/** Owns its own 4 Hz clock so the rest of the HUD does not re-render for it. */
 function Timer({ client, hud }: { client: GameClient; hud: HudState }) {
   useTicker(250);
   const g = hud.global;
@@ -12,13 +19,19 @@ function Timer({ client, hud }: { client: GameClient; hud: HudState }) {
   const elapsed = client.serverNow();
   const remaining = Math.max(0, g.durationMs - elapsed);
   const final = elapsed >= MATCH_CONFIG.finalWarningAtMs;
-  const extraction = g.phase === 'EXTRACTION_PHASE';
+  const extraction = g.phase === 'EXTRACTION_PHASE' || g.extractionZones.some((z) => z.active);
+  const untilExtraction = EXTRACTION_OPENS_AT - elapsed;
   return (
-    <div className={`hud-timer ${final ? 'hud-timer--final' : ''}`}>
-      <span className="hud-timer__label">MATCH TIME</span>
+    <div className={`hud-timer ${final ? 'hud-timer--final' : ''} ${extraction ? 'is-extract' : ''}`}>
       <span className="hud-timer__value">{formatClock(remaining)}</span>
-      <span className={`hud-timer__phase ${extraction ? 'is-extract' : ''}`}>
-        {final ? 'WARNING · FINAL MINUTE' : extraction ? 'EXTRACTION AVAILABLE' : PHASE_LABELS[g.phase]}
+      <span className="hud-timer__phase">
+        {final
+          ? 'FINAL MINUTE · EXTRACT NOW'
+          : extraction
+            ? 'EXTRACTION OPEN'
+            : untilExtraction > 0
+              ? `EXTRACTION IN ${formatClock(untilExtraction)}`
+              : PHASE_LABELS[g.phase]}
       </span>
     </div>
   );
@@ -84,27 +97,44 @@ function WeaponPanel({ hud }: { hud: HudState }) {
   );
 }
 
+function KillFeed({ hud }: { hud: HudState }) {
+  return (
+    <ul className="hud-feed">
+      {hud.feed.map((f) => (
+        <li key={f.id} className={f.mine ? 'is-mine' : ''}>
+          {f.killer ? <b>{f.killer}</b> : <em>zone</em>}
+          <span className="hud-feed__weapon">{f.weapon ?? '✕'}</span>
+          <b>{f.victim}</b>
+          {f.bountyCents > 0 && (
+            <span className="hud-feed__bounty">
+              +<Usdc cents={f.bountyCents} />
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * In-match HUD. Re-renders only when the client publishes new HUD state
+ * (at most 10 Hz); timed effects are CSS animations keyed by event ids.
+ */
 export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
-  const now = useTicker(100);
   const s = hud.self;
   const g = hud.global;
-  const hurt = now - hud.hurtAt < 350;
   const lowHp = !!s && s.hp > 0 && s.hp < 30;
-  const alertOn = now - hud.extractAlertAt < 3500;
+  const alertOn = performance.now() - hud.extractAlertAt < 3500;
   const medkits = hud.inventory.slots.reduce((n, x) => n + (x?.itemId === 'medkit' ? x.qty : 0), 0);
   const plates = hud.inventory.slots.reduce((n, x) => n + (x?.itemId === 'armor_plate' ? x.qty : 0), 0);
-  const lastKill = [...hud.feed].reverse().find((f) => f.byMe && now - f.at < 1800);
+  const lastKill = hud.feed.length > 0 ? [...hud.feed].reverse().find((f) => f.byMe) : undefined;
 
   return (
     <div className="hud" aria-live="polite">
-      <div className={`hud-vignette ${hurt ? 'is-on' : ''} ${lowHp ? 'is-low' : ''}`} />
+      <div key={hud.hurtAt} className={`hud-vignette ${hud.hurtAt > 0 ? 'is-hit' : ''} ${lowHp ? 'is-low' : ''}`} />
 
       {hud.hurts.map((h) => (
-        <div
-          key={h.id}
-          className="hud-hurt-dir"
-          style={{ transform: `translate(-50%, -50%) rotate(${h.angle}rad)`, opacity: Math.max(0, 1 - (now - h.at) / 1200) }}
-        >
+        <div key={h.id} className="hud-hurt-dir" style={{ transform: `translate(-50%, -50%) rotate(${h.angle}rad)` }}>
           <i />
         </div>
       ))}
@@ -113,7 +143,11 @@ export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
         <div key={lastKill.id} className="hud-killconfirm">
           <span>ELIMINATED</span>
           <strong>{lastKill.victim}</strong>
-          {lastKill.bountyCents > 0 && <em>+{formatCents(lastKill.bountyCents)} BOUNTY</em>}
+          {lastKill.bountyCents > 0 && (
+            <em>
+              +<Usdc cents={lastKill.bountyCents} /> BOUNTY
+            </em>
+          )}
         </div>
       )}
 
@@ -123,6 +157,7 @@ export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
 
       <div className="hud-top-center">
         <Timer client={client} hud={hud} />
+        <ExtractBeacon client={client} hud={hud} />
         <div className="hud-announcements">
           {hud.announcements.map((a) => (
             <div key={a.id} className={`hud-announce hud-announce--${a.kind}`}>
@@ -134,46 +169,28 @@ export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
       </div>
 
       <div className="hud-top-right">
-        <div className="hud-stat">
-          <span>ALIVE</span>
-          <b>{g?.alive ?? '—'}</b>
-        </div>
-        <div className="hud-stat">
-          <span>KILLS</span>
-          <b>{s?.kills ?? 0}</b>
+        <div className="hud-stats">
+          <div className="hud-stat">
+            <span>ALIVE</span>
+            <b>{g?.alive ?? '—'}</b>
+          </div>
+          <div className="hud-stat">
+            <span>KILLS</span>
+            <b>{s?.kills ?? 0}</b>
+          </div>
         </div>
         <div className="hud-ping">{hud.ping} ms</div>
-        <ul className="hud-feed">
-          {hud.feed.map((f) => (
-            <li key={f.id} className={f.mine ? 'is-mine' : ''}>
-              {f.killer ? <b>{f.killer}</b> : <em>zone</em>}
-              <span className="hud-feed__weapon">{f.weapon ?? '✕'}</span>
-              <b>{f.victim}</b>
-              {f.bountyCents > 0 && <span className="hud-feed__bounty">+{formatCents(f.bountyCents)}</span>}
-            </li>
-          ))}
-        </ul>
+        <KillFeed hud={hud} />
       </div>
 
-      {s && s.bountyCents > 0 && (
-        <div className="hud-hvt">
-          <strong>HIGH VALUE TARGET</strong>
-          <span>BOUNTY: {formatCents(s.bountyCents)}</span>
-        </div>
-      )}
+      <div className="hud-center-alerts">
+        <KingpinBanner hud={hud} />
+        <BountyBanner hud={hud} />
+        {alertOn && <div className="hud-alert">SOMEONE IS EXTRACTING NEARBY</div>}
+      </div>
 
-      {alertOn && <div className="hud-alert">⚠ SOMEONE IS EXTRACTING NEARBY</div>}
-
-      {s?.extraction && (
-        <div className="hud-extract">
-          <span>EXTRACTING</span>
-          <b>{(s.extraction.remainingMs / 1000).toFixed(1)}s</b>
-          <div className="hud-extract__bar">
-            <i style={{ width: `${s.extraction.progress * 100}%` }} />
-          </div>
-          <small>Stay in the zone. Taking damage cancels.</small>
-        </div>
-      )}
+      <ExtractionProgress hud={hud} />
+      <ExtractionInterrupted hud={hud} />
 
       {hud.interactHint && (
         <div className="hud-interact">
@@ -181,22 +198,7 @@ export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
         </div>
       )}
 
-      <div className="hud-toasts">
-        {hud.toasts.map((t) => {
-          const def = getItemDef(t.itemId);
-          const cfg = RARITY_CONFIG[def.rarity];
-          return (
-            <div key={t.id} className="hud-toast" style={{ borderColor: cfg.color, boxShadow: `0 0 28px ${cfg.color}44` }}>
-              <ItemIcon type={def.type} rarity={def.rarity} icon={def.icon} size={42} />
-              <div>
-                <span style={{ color: cfg.color }}>{cfg.label.toUpperCase()} ITEM</span>
-                <strong>{def.name.toUpperCase()}{t.qty > 1 ? ` ×${t.qty}` : ''}</strong>
-                <small>Estimated Value {formatCents(t.value)}</small>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <LootToasts hud={hud} />
 
       <div className="hud-notices">
         {hud.notices.map((n) => (
@@ -221,14 +223,7 @@ export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
         </div>
       )}
 
-      {s && (
-        <div className="hud-bag">
-          <span>CURRENT BAG</span>
-          <b>{formatCents(s.bagValue)}</b>
-          {s.pendingBountyCents > 0 && <small>+ {formatCents(s.pendingBountyCents)} bounty on extract</small>}
-          <em>TAB · INVENTORY</em>
-        </div>
-      )}
+      <BagValue hud={hud} />
     </div>
   );
 }

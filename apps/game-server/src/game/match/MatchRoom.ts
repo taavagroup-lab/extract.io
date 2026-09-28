@@ -5,6 +5,7 @@ import {
   MATCH_CONFIG,
   NETWORK_CONFIG,
   WEAPONS,
+  type KingpinRevealConfig,
 } from '@extract/game-config';
 import {
   INPUT_BUTTONS,
@@ -26,7 +27,7 @@ import {
   type WeaponId,
 } from '@extract/game-types';
 import { logEvent, type AnalyticsBus, type Logger } from '@extract/server-core';
-import { Rng, dist2, stepMovement, wrapAngle } from '@extract/shared';
+import { Rng, computeRunXp, dist2, stepMovement, wrapAngle } from '@extract/shared';
 import { BotBrain } from '../../bots/BotBrain';
 import type { NavGrid } from '../../bots/NavGrid';
 import { ClientView } from '../../net/ClientView';
@@ -39,6 +40,7 @@ import { LimitedSupplyTracker } from '../loot/lootGenerator';
 import { BountySystem } from '../systems/BountySystem';
 import { CombatSystem } from '../systems/CombatSystem';
 import { ExtractionSystem } from '../systems/ExtractionSystem';
+import { KingpinSystem } from '../systems/KingpinSystem';
 import { LootSystem } from '../systems/LootSystem';
 import { SupplyDropSystem } from '../systems/SupplyDropSystem';
 import { World, type Drop } from '../world/World';
@@ -58,6 +60,8 @@ export interface MatchRoomOptions {
   devTools: boolean;
   seasonId: string | null;
   seed?: number;
+  /** Overrides THREAT_CONFIG.kingpinReveal (tests / events). */
+  kingpin?: KingpinRevealConfig;
 }
 
 const OUTCOME: Record<RunEndReason, RunOutcome> = { killed: 'DIED', timeout: 'TIMEOUT', abandoned: 'ABANDONED' };
@@ -77,6 +81,7 @@ export class MatchRoom {
   readonly loot: LootSystem;
   readonly extraction: ExtractionSystem;
   readonly bounty: BountySystem;
+  readonly kingpins: KingpinSystem;
   readonly supplyDrops: SupplyDropSystem;
   supply: LimitedSupplyTracker = LimitedSupplyTracker.fromDefinitions({});
 
@@ -118,6 +123,7 @@ export class MatchRoom {
     this.loot = new LootSystem(this);
     this.extraction = new ExtractionSystem(this);
     this.bounty = new BountySystem(this);
+    this.kingpins = new KingpinSystem(this, opts.kingpin);
     this.supplyDrops = new SupplyDropSystem(this);
     this.sm = new MatchStateMachine((phase, prev) => this.onPhaseEnter(phase, prev));
   }
@@ -295,6 +301,7 @@ export class MatchRoom {
     this.extraction.update();
     this.supplyDrops.update();
     this.bounty.update();
+    this.kingpins.update();
     this.checkDisconnects();
     this.checkTimers();
   }
@@ -499,6 +506,7 @@ export class MatchRoom {
       extractionZones: this.extraction.toState(),
       supplyDrops: this.supplyDrops.drops.map((d) => ({ ...d })),
       bounties: this.bounty.markers,
+      kingpins: this.kingpins.markers,
     };
     this.globalCacheVersion = this.globalVersion;
     return this.globalCache;
@@ -589,10 +597,12 @@ export class MatchRoom {
       this.world.scatter(drops, x, y, DEATH_SPILL_RADIUS, this.now);
     }
     this.bounty.onRemoved(p);
+    this.kingpins.onRemoved(p);
     this.markGlobalDirty();
     if (!p.isHuman) return;
 
     const survivedMs = Math.round(this.now - p.spawnedAt);
+    const xp = computeRunXp({ outcome: OUTCOME[reason], kills: p.kills, bountyKills: p.bountyKills, survivedMs, extractedValueCents: 0 }).total;
     const summary: DeathSummary = {
       reason,
       killerName: killer?.name ?? null,
@@ -607,6 +617,7 @@ export class MatchRoom {
       keptItems: loss.kept,
       lostItems: [...loss.droppedItems.filter((i) => i.qty > 0), ...loss.droppedWeapons.map((w) => ({ itemId: w.itemId, qty: 1 }))],
       bountyLostCents: p.pendingBountyCents,
+      xp,
     };
     p.channel?.send({ t: 'death', d: summary });
     this.analytics.track('PLAYER_DIED', { matchId: this.id, userId: p.userId, reason, kills: p.kills, lostCents: loss.lostValue });
@@ -627,6 +638,7 @@ export class MatchRoom {
         payoutCents: loss.insuranceCents,
         items: loss.kept,
         extraction: null,
+        xp,
       });
     }
   }
@@ -640,11 +652,13 @@ export class MatchRoom {
     p.extractedLootValue = value;
     this.removeFromWorld(p);
     this.bounty.onRemoved(p);
+    this.kingpins.onRemoved(p);
     this.markGlobalDirty();
     this.extractedList.push({ name: p.name, valueCents: value });
     if (!p.isHuman) return;
 
     const survivedMs = Math.round(this.now - p.spawnedAt);
+    const xp = computeRunXp({ outcome: 'EXTRACTED', kills: p.kills, bountyKills: p.bountyKills, survivedMs, extractedValueCents: value }).total;
     p.channel?.send({
       t: 'extracted',
       x: {
@@ -655,6 +669,7 @@ export class MatchRoom {
         damageDealt: Math.round(p.damageDealt),
         survivedMs,
         bountyEarnedCents: p.pendingBountyCents,
+        xp,
       },
     });
     logEvent(this.logger, 'player_extracted', { player: p.name, zone: zone.id, valueCents: value, items: items.length });
@@ -676,6 +691,7 @@ export class MatchRoom {
         payoutCents: 0,
         items,
         extraction: { pointId: zone.id, valueCents: value },
+        xp,
       });
     }
   }

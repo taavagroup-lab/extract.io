@@ -1,4 +1,4 @@
-import { NETWORK_CONFIG, WEAPONS, weaponFromIndex, weaponIndex } from '@extract/game-config';
+import { NETWORK_CONFIG, THREAT_CONFIG, WEAPONS, weaponFromIndex, weaponIndex } from '@extract/game-config';
 import { PLAYER_FLAGS, type Rarity } from '@extract/game-types';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -6,11 +6,13 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { isTierAtLeast } from '@extract/shared';
 import { settings, type QualitySetting } from '../../lib/settings';
 import { sound } from '../audio/SoundEngine';
 import type { InputController } from '../input/InputController';
 import type { GameClient } from '../net/GameClient';
 import { Effects } from './Effects';
+import { GradePass } from './GradePass';
 import { Labels } from './Labels';
 import { buildMap, type MapVisuals } from './MapBuilder3D';
 import { fadeUniforms } from './materials';
@@ -43,6 +45,7 @@ export class GameRenderer {
   private readonly camera = new THREE.PerspectiveCamera(FOV, 1, 10, 6000);
   private readonly composer: EffectComposer;
   private readonly bloom: UnrealBloomPass;
+  private readonly grade: GradePass;
   private readonly sun: THREE.DirectionalLight;
   private readonly muzzleLight = new THREE.PointLight(0xffc27a, 0, 320, 2);
   private readonly effects: Effects;
@@ -141,6 +144,8 @@ export class GameRenderer {
     // Threshold > 1: only HDR emissives (beams, visors, tracers) bloom, not bright surfaces.
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.6, 0.5, 1.02);
     this.composer.addPass(this.bloom);
+    this.grade = new GradePass();
+    this.composer.addPass(this.grade);
     this.composer.addPass(new OutputPass());
 
     this.crosshair = document.createElement('div');
@@ -227,6 +232,7 @@ export class GameRenderer {
     this.bloom.resolution.set(w / 2, h / 2);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.grade.setAspect(w / h);
     this.labels.setSize(w, h);
   }
 
@@ -310,6 +316,9 @@ export class GameRenderer {
     this.updateCrosshair(dt);
     this.labels.updateDamage(this.camera);
     this.muzzleLight.intensity *= Math.exp(-dt * 28);
+    const me = c.self;
+    const hurt = me && c.status === 'playing' && me.hp > 0 ? Math.max(0, Math.min(1, (40 - me.hp) / 30)) : 0;
+    this.grade.setState(hurt, me?.extraction ? 1 : 0, dt);
 
     if (PRESETS[this.level].composer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
@@ -336,7 +345,10 @@ export class GameRenderer {
     this.self.root.visible = alive && c.status === 'playing';
     const weapon = s.weapons[s.activeSlot];
     this.self.setWeapon(weaponIndex(weapon?.weaponId));
-    const flags = (s.bountyCents > 0 ? PLAYER_FLAGS.BOUNTY : 0) | (s.status === 'EXTRACTING' ? PLAYER_FLAGS.EXTRACTING : 0);
+    const flags =
+      (s.bountyCents > 0 ? PLAYER_FLAGS.BOUNTY : 0) |
+      (s.status === 'EXTRACTING' ? PLAYER_FLAGS.EXTRACTING : 0) |
+      (isTierAtLeast(s.bagValue, THREAT_CONFIG.kingpinReveal.minTier) ? PLAYER_FLAGS.KINGPIN : 0);
     this.self.update(c.renderX, c.renderY, this.aim, flags, dt, time);
 
     if (this.self.root.visible) {
@@ -370,7 +382,16 @@ export class GameRenderer {
       model.setWeapon(p.weapon);
       model.update(p.x, p.y, p.rot, p.flags, dt, time);
       this.maybeDust(p.id, p.x, p.y, model.speed);
-      const tag = p.flags & PLAYER_FLAGS.BOUNTY ? 'HVT' : p.flags & PLAYER_FLAGS.DISCONNECTED ? 'OFFLINE' : p.flags & PLAYER_FLAGS.EXTRACTING ? 'EXTRACTING' : null;
+      const tag =
+        p.flags & PLAYER_FLAGS.KINGPIN
+          ? 'KINGPIN'
+          : p.flags & PLAYER_FLAGS.BOUNTY
+            ? 'HVT'
+            : p.flags & PLAYER_FLAGS.DISCONNECTED
+              ? 'OFFLINE'
+              : p.flags & PLAYER_FLAGS.EXTRACTING
+                ? 'EXTRACTING'
+                : null;
       this.labels.updatePlayer(this.camera, p.id, p.name, p.bot, p.x, p.y, p.hp, p.maxHp, p.armor, tag);
     }
     for (const [id, model] of this.players) {
@@ -484,7 +505,10 @@ export class GameRenderer {
           sound.announce(ev.kind);
           break;
         case 'extract':
-          if (ev.state === 'cancelled') sound.dryFire();
+          if (ev.state === 'cancelled') sound.extractCancel();
+          break;
+        case 'kingpin':
+          sound.kingpin();
           break;
         default:
           break;

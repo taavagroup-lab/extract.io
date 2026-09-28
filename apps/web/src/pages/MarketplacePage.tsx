@@ -1,9 +1,11 @@
-import { ECONOMY_CONFIG, getItemDef } from '@extract/game-config';
+import { ECONOMY_CONFIG, RARITY_CONFIG, getItemDef } from '@extract/game-config';
 import { RARITIES, type ListingDTO, type ListingSort, type Paginated, type Rarity, type TransactionDTO, type WalletDTO } from '@extract/game-types';
-import { formatCents } from '@extract/shared';
-import { Button, EmptyState, ItemIcon, Modal, Money, Panel, RarityBadge, Spinner, Tabs } from '@extract/ui';
+import { Button, EmptyState, ItemIcon, Modal, Panel, RarityBadge, Spinner, Tabs } from '@extract/ui';
 import { useCallback, useEffect, useState } from 'react';
+import { Usdc } from '../components/Brand';
+import { ItemCard, MetaRow, formatSerial, limitedLabel } from '../components/ItemCard';
 import { ApiError, api } from '../lib/api';
+import { useCurrency } from '../lib/publicConfig';
 import { session } from '../lib/session';
 import { useStore } from '../lib/store';
 import { PageShell } from './PageShell';
@@ -57,6 +59,7 @@ function WalletButton() {
 
 function BuyModal({ listing, onClose, onDone }: { listing: ListingDTO; onClose: () => void; onDone: (msg: string) => void }) {
   const { user } = useStore(session);
+  const { format } = useCurrency();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // One key per purchase attempt: retries (double click, network retry) cannot buy twice.
@@ -70,7 +73,7 @@ function BuyModal({ listing, onClose, onDone }: { listing: ListingDTO; onClose: 
     try {
       const tx = await api.buy(listing.id, key);
       refreshUser();
-      onDone(`Bought ${listing.name} for ${formatCents(tx.priceCents)}`);
+      onDone(`Bought ${listing.name} for ${format(tx.priceCents)}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Purchase failed');
     } finally {
@@ -93,13 +96,13 @@ function BuyModal({ listing, onClose, onDone }: { listing: ListingDTO; onClose: 
         </div>
         <dl className="fee-table">
           <dt>Price</dt>
-          <dd className="is-strong">{formatCents(listing.priceCents)}</dd>
+          <dd className="is-strong">{format(listing.priceCents)}</dd>
           <dt>Your balance</dt>
-          <dd>{formatCents(balance)}</dd>
+          <dd>{format(balance)}</dd>
           <dt>After purchase</dt>
-          <dd>{formatCents(balance - listing.priceCents)}</dd>
+          <dd>{format(balance - listing.priceCents)}</dd>
         </dl>
-        {!enough && <p className="form-error">Not enough TEST USDC.</p>}
+        {!enough && <p className="form-error">Not enough balance.</p>}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           <Button variant="ghost" onClick={onClose}>
@@ -111,6 +114,51 @@ function BuyModal({ listing, onClose, onDone }: { listing: ListingDTO; onClose: 
         </div>
       </div>
     </Modal>
+  );
+}
+
+function ListingCard({ listing: l, own, onBuy }: { listing: ListingDTO; own: boolean; onBuy: () => void }) {
+  const def = getItemDef(l.itemId);
+  const perUnit = Math.round(l.priceCents / l.quantity);
+  return (
+    <ItemCard
+      name={l.name}
+      type={def.type}
+      rarity={l.rarity}
+      icon={l.icon}
+      quantity={l.quantity}
+      kicker={l.maxSupply !== null ? limitedLabel(l.seasonName) : null}
+      badges={own ? <span className="x-chip">Yours</span> : null}
+      footer={
+        <>
+          <div className="item-card__price">
+            <Usdc cents={l.priceCents} />
+            {l.quantity > 1 && (
+              <small>
+                <Usdc cents={perUnit} /> each
+              </small>
+            )}
+          </div>
+          <Button size="sm" variant={own ? 'ghost' : 'primary'} disabled={own} onClick={onBuy}>
+            {own ? 'Listed' : 'Buy'}
+          </Button>
+        </>
+      }
+    >
+      {l.serialNumber !== null && <MetaRow label="Serial">{formatSerial(l.serialNumber, l.maxSupply)}</MetaRow>}
+      <MetaRow label="Floor">{l.floorCents !== null ? <Usdc cents={l.floorCents} /> : '—'}</MetaRow>
+      <MetaRow label="Last sale">{l.lastSaleCents !== null ? <Usdc cents={l.lastSaleCents} /> : '—'}</MetaRow>
+      <MetaRow label="Est. value">
+        <Usdc cents={l.estimatedValue} />
+      </MetaRow>
+      {l.remainingSupply !== null && (
+        <MetaRow label="Supply left">
+          {l.remainingSupply} / {l.maxSupply}
+        </MetaRow>
+      )}
+      <MetaRow label="Season">{l.seasonName ?? '—'}</MetaRow>
+      <MetaRow label="Seller">{l.sellerName}</MetaRow>
+    </ItemCard>
   );
 }
 
@@ -146,13 +194,13 @@ function Browse({ onNotice }: { onNotice: (m: string) => void }) {
 
   return (
     <>
-      <div className="filters">
+      <div className="toolbar">
         <input className="search" placeholder="Search items…" value={search} onChange={(e) => setSearch(e.target.value)} />
         <select value={rarity} onChange={(e) => { setRarity(e.target.value as Rarity | ''); setPage(1); }}>
           <option value="">All rarities</option>
           {RARITIES.map((r) => (
             <option key={r} value={r}>
-              {r.charAt(0) + r.slice(1).toLowerCase()}
+              {RARITY_CONFIG[r].label}
             </option>
           ))}
         </select>
@@ -168,37 +216,10 @@ function Browse({ onNotice }: { onNotice: (m: string) => void }) {
       {!data && !error && <Spinner label="Loading" />}
       {data && data.items.length === 0 && <EmptyState title="No listings found" />}
       {data && data.items.length > 0 && (
-        <div className="listing-grid">
-          {data.items.map((l) => {
-            const own = l.sellerId === user?.id;
-            return (
-              <article key={l.id} className={`listing rarity-${l.rarity.toLowerCase()}`}>
-                <div className="listing__top">
-                  <ItemIcon type={getItemDef(l.itemId).type} rarity={l.rarity} icon={l.icon} size={44} />
-                  <RarityBadge rarity={l.rarity} />
-                </div>
-                <h3>
-                  {l.name}
-                  {l.quantity > 1 && <small> ×{l.quantity}</small>}
-                </h3>
-                {l.serialNumber !== null && (
-                  <p className="serial">
-                    #{l.serialNumber}
-                    {l.maxSupply ? ` / ${l.maxSupply}` : ''}
-                  </p>
-                )}
-                <p className="listing__meta">
-                  Est. <Money cents={l.estimatedValue} /> · by {l.sellerName}
-                </p>
-                <div className="listing__bottom">
-                  <Money cents={l.priceCents} className="listing__price" />
-                  <Button size="sm" variant={own ? 'ghost' : 'primary'} disabled={own} onClick={() => setBuying(l)}>
-                    {own ? 'Yours' : 'Buy'}
-                  </Button>
-                </div>
-              </article>
-            );
-          })}
+        <div className="card-grid">
+          {data.items.map((l) => (
+            <ListingCard key={l.id} listing={l} own={l.sellerId === user?.id} onBuy={() => setBuying(l)} />
+          ))}
         </div>
       )}
       {data && pages > 1 && (
@@ -254,16 +275,24 @@ function MyListings({ onNotice }: { onNotice: (m: string) => void }) {
         <tbody>
           {rows.map((l) => (
             <tr key={l.id}>
-              <td>{l.name}</td>
+              <td>
+                <div className="item-cell">
+                  <ItemIcon type={getItemDef(l.itemId).type} rarity={l.rarity} icon={l.icon} size={28} />
+                  <span>
+                    {l.name}
+                    {l.serialNumber !== null && <small className="serial"> {formatSerial(l.serialNumber, l.maxSupply)}</small>}
+                  </span>
+                </div>
+              </td>
               <td>
                 <RarityBadge rarity={l.rarity} />
               </td>
               <td className="num">{l.quantity}</td>
               <td className="num">
-                <Money cents={l.priceCents} />
+                <Usdc cents={l.priceCents} />
               </td>
               <td className="num">
-                <Money cents={l.priceCents - Math.floor((l.priceCents * ECONOMY_CONFIG.marketplace.feeBps) / 10_000)} />
+                <Usdc cents={l.priceCents - Math.floor((l.priceCents * ECONOMY_CONFIG.marketplace.feeBps) / 10_000)} />
               </td>
               <td>{new Date(l.createdAt).toLocaleString()}</td>
               <td className="row-actions">
@@ -325,11 +354,11 @@ function History() {
               </td>
               <td>{t.counterparty}</td>
               <td className="num">
-                <Money cents={t.priceCents} />
+                <Usdc cents={t.priceCents} />
               </td>
-              <td className="num">{t.role === 'seller' ? <Money cents={t.feeCents} /> : '—'}</td>
+              <td className="num">{t.role === 'seller' ? <Usdc cents={t.feeCents} /> : '—'}</td>
               <td className="num">
-                <Money cents={t.role === 'buyer' ? -t.priceCents : t.sellerProceedsCents} />
+                <Usdc cents={t.role === 'buyer' ? -t.priceCents : t.sellerProceedsCents} />
               </td>
             </tr>
           ))}
@@ -340,6 +369,7 @@ function History() {
 }
 
 export function MarketplacePage() {
+  const { unit } = useCurrency();
   const [tab, setTab] = useState<Tab>('browse');
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
@@ -349,7 +379,7 @@ export function MarketplacePage() {
   }, [notice]);
 
   return (
-    <PageShell title="Marketplace" actions={<WalletButton />}>
+    <PageShell title="Market" kicker={`Player trading · priced in ${unit}`} actions={<WalletButton />}>
       <Panel
         title={
           <Tabs
@@ -362,7 +392,7 @@ export function MarketplacePage() {
             ]}
           />
         }
-        actions={<span className="panel-meta">Fee {ECONOMY_CONFIG.marketplace.feeBps / 100}% · TEST USDC only</span>}
+        actions={<span className="panel-meta">Fee {ECONOMY_CONFIG.marketplace.feeBps / 100}% · {unit}</span>}
       >
         {notice && <p className="page-notice">{notice}</p>}
         {tab === 'browse' && <Browse onNotice={setNotice} />}

@@ -210,6 +210,17 @@ export class MatchManager implements ConnectionHandler {
     return { rooms: this.rooms.size, playersInWorld: players, bots, pendingPersistenceJobs: this.deps.persistence.pending ?? 0 };
   }
 
+  /** Public population numbers: connected humans (lobby + raid) and running raids. Bots are not players. */
+  publicStatus(): { onlinePlayers: number; activeMatches: number } {
+    let onlinePlayers = 0;
+    let activeMatches = 0;
+    for (const r of this.rooms.values()) {
+      onlinePlayers += r.connectedHumans;
+      if (r.isActive) activeMatches++;
+    }
+    return { onlinePlayers, activeMatches };
+  }
+
   describeRooms(): unknown[] {
     return [...this.rooms.values()].map((r) => ({
       matchId: r.id,

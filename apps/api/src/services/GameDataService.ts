@@ -5,6 +5,7 @@ import type {
   LeaderboardCategory,
   LeaderboardDTO,
   LeaderboardPeriod,
+  LeaderboardRowDTO,
   MatchHistoryDTO,
   ProfileDTO,
   Rarity,
@@ -14,6 +15,8 @@ import type {
 import { conflict, notFound } from '../errors';
 import { toUserDTO } from '../mappers';
 
+export const LEADERBOARD_MAX_PAGE_SIZE = 50;
+
 /** Read models: leaderboards, profile, seasons + the optional wallet link. */
 export class GameDataService {
   constructor(
@@ -21,20 +24,55 @@ export class GameDataService {
     private readonly chain: BlockchainProvider,
   ) {}
 
-  async leaderboard(category: LeaderboardCategory, period: LeaderboardPeriod, limit = 100): Promise<LeaderboardDTO> {
+  async leaderboard(
+    category: LeaderboardCategory,
+    period: LeaderboardPeriod,
+    opts: { page?: number; pageSize?: number; userId?: string | null } = {},
+  ): Promise<LeaderboardDTO> {
     const periodKey = periodKeyFor(period, CURRENT_SEASON.id);
-    const rows = await this.db.leaderboardEntry.findMany({
-      where: { category, period, periodKey, value: { gt: 0 } },
-      orderBy: [{ value: 'desc' }, { updatedAt: 'asc' }],
-      take: Math.min(100, Math.max(1, limit)),
-      include: { user: { select: { username: true } } },
-    });
+    const page = Math.max(1, Math.floor(opts.page ?? 1));
+    const pageSize = Math.min(LEADERBOARD_MAX_PAGE_SIZE, Math.max(1, Math.floor(opts.pageSize ?? 25)));
+    const where = { category, period, periodKey, value: { gt: 0 } };
+    const [total, rows] = await this.db.$transaction([
+      this.db.leaderboardEntry.count({ where }),
+      this.db.leaderboardEntry.findMany({
+        where,
+        // Ties: whoever reached the value first ranks higher.
+        orderBy: [{ value: 'desc' }, { updatedAt: 'asc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { user: { select: { username: true } } },
+      }),
+    ]);
+    const offset = (page - 1) * pageSize;
     return {
       category,
       period,
       periodKey,
-      rows: rows.map((r, i) => ({ rank: i + 1, userId: r.userId, username: r.user.username, value: r.value })),
+      page,
+      pageSize,
+      total,
+      rows: rows.map((r, i) => ({ rank: offset + i + 1, userId: r.userId, username: r.user.username, value: r.value })),
+      me: opts.userId ? await this.rankOf(opts.userId, category, period, periodKey) : null,
     };
+  }
+
+  /** One indexed count query: players strictly ahead (same ordering as the board). */
+  private async rankOf(userId: string, category: LeaderboardCategory, period: LeaderboardPeriod, periodKey: string): Promise<LeaderboardRowDTO | null> {
+    const entry = await this.db.leaderboardEntry.findUnique({
+      where: { userId_category_period_periodKey: { userId, category, period, periodKey } },
+      include: { user: { select: { username: true } } },
+    });
+    if (!entry || entry.value <= 0) return null;
+    const ahead = await this.db.leaderboardEntry.count({
+      where: {
+        category,
+        period,
+        periodKey,
+        OR: [{ value: { gt: entry.value } }, { value: entry.value, updatedAt: { lt: entry.updatedAt } }],
+      },
+    });
+    return { rank: ahead + 1, userId, username: entry.user.username, value: entry.value };
   }
 
   async profile(userId: string): Promise<ProfileDTO> {
@@ -42,18 +80,37 @@ export class GameDataService {
     if (!user) throw notFound('User not found');
     const matches = await this.db.matchPlayer.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 20 });
     const p = user.profile;
+    const totalMatches = p?.totalMatches ?? 0;
+    const totalExtractions = p?.totalExtractions ?? 0;
+    const seasonKey = periodKeyFor('SEASON', CURRENT_SEASON.id);
+    const [standing, rankedPlayers] = await Promise.all([
+      this.rankOf(userId, 'SEASON_XP', 'SEASON', seasonKey),
+      this.db.leaderboardEntry.count({ where: { category: 'SEASON_XP', period: 'SEASON', periodKey: seasonKey, value: { gt: 0 } } }),
+    ]);
     return {
       user: toUserDTO(user),
       stats: {
-        totalMatches: p?.totalMatches ?? 0,
+        totalMatches,
         totalKills: p?.totalKills ?? 0,
         totalDeaths: p?.totalDeaths ?? 0,
-        totalExtractions: p?.totalExtractions ?? 0,
+        totalExtractions,
+        failedExtractions: Math.max(0, totalMatches - totalExtractions),
         totalLootExtractedCents: p?.totalLootExtractedCents ?? 0,
         highestSingleExtractionCents: p?.highestSingleExtractionCents ?? 0,
         highestKillStreak: p?.highestKillStreak ?? 0,
         bountyKills: p?.bountyKills ?? 0,
         bountyEarnedCents: p?.bountyEarnedCents ?? 0,
+        legendaryExtracted: p?.legendaryExtracted ?? 0,
+        kingpinExtractions: p?.kingpinExtractions ?? 0,
+        totalXp: p?.totalXp ?? 0,
+        playtimeMs: (p?.totalPlaytimeSec ?? 0) * 1000,
+      },
+      season: {
+        seasonId: CURRENT_SEASON.id,
+        seasonName: CURRENT_SEASON.name,
+        xp: standing?.value ?? 0,
+        rank: standing?.rank ?? null,
+        rankedPlayers,
       },
       recentMatches: matches.map(
         (m): MatchHistoryDTO => ({
@@ -63,6 +120,7 @@ export class GameDataService {
           lootValueCents: m.lootValueCents,
           securedValueCents: m.securedValueCents,
           survivedMs: m.survivedMs,
+          xp: m.xp,
           createdAt: m.createdAt.toISOString(),
         }),
       ),

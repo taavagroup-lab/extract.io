@@ -1,47 +1,74 @@
-import { Button, Spinner } from '@extract/ui';
+import { BRAND } from '@extract/game-config';
+import { formatClock } from '@extract/shared';
+import { Button } from '@extract/ui';
+import { SeasonBadge } from '../../components/Brand';
 import type { HudState } from '../net/GameClient';
 
+/**
+ * Lobby: raid size, real players vs AI raiders (never presented as humans),
+ * and the deploy countdown once the raid is locked.
+ */
 export function Matchmaking({ hud, onCancel }: { hud: HudState; onCancel: () => void }) {
   const lobby = hud.lobby;
   const starting = lobby?.phase === 'STARTING' && lobby.countdownMs !== null;
-  const countdown = starting ? Math.max(1, Math.ceil((lobby.countdownMs ?? 0) / 1000)) : null;
+  const ai = lobby ? Math.max(0, lobby.found - lobby.humans) : 0;
+  const fill = lobby ? Math.min(1, lobby.found / Math.max(1, lobby.target)) : 0;
   return (
-    <div className="matchmaking">
-      <div className="mm-card">
-        <p className="mm-kicker">FIND MATCH</p>
-        {!lobby && <Spinner label={hud.status === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'} />}
-        {lobby && !starting && (
+    <div className="raid-screen">
+      <div className="raid-screen__grid" aria-hidden="true" />
+      <div className="raid-card">
+        <p className="x-kicker raid-card__kicker">
+          <span className={`raid-dot ${starting ? 'is-go' : ''}`} />
+          {!lobby ? (hud.status === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING') : starting ? 'RAID LOCKED' : 'FINDING RAID'}
+        </p>
+
+        {lobby && (
           <>
-            <Spinner label="Searching…" />
-            <p className="mm-found">
-              PLAYERS FOUND <b>{lobby.found}</b> / {lobby.target}
-            </p>
-            <div className="mm-bar">
-              <i style={{ width: `${(lobby.found / Math.max(1, lobby.target)) * 100}%` }} />
+            <div className="raid-count">
+              <span className="raid-count__label">PLAYERS</span>
+              <b>{lobby.found}</b>
+              <span className="raid-count__of">/ {lobby.target}</span>
             </div>
-            <p className="mm-note">{lobby.humans} human{lobby.humans === 1 ? '' : 's'} · empty slots are filled with bots</p>
+            <div className="raid-bar" aria-hidden="true">
+              <i style={{ width: `${fill * 100}%` }} />
+            </div>
+            <div className="raid-split">
+              <span>
+                <b>{lobby.humans}</b> {lobby.humans === 1 ? 'player' : 'players'}
+              </span>
+              {ai > 0 && (
+                <span>
+                  <b>{ai}</b> AI raiders
+                </span>
+              )}
+            </div>
           </>
         )}
-        {starting && (
-          <>
-            <p className="mm-found">
-              PLAYERS FOUND <b>{lobby.found}</b> / {lobby.target}
-            </p>
-            <p className="mm-starting">STARTING IN</p>
-            <p key={countdown} className="mm-countdown">
-              {countdown}
-            </p>
-          </>
+
+        {starting && lobby ? (
+          <div className="raid-deploy">
+            <span className="x-kicker">DEPLOYING IN</span>
+            <b key={Math.ceil((lobby.countdownMs ?? 0) / 1000)}>{formatClock(lobby.countdownMs ?? 0)}</b>
+          </div>
+        ) : (
+          <div className="raid-scan" aria-hidden="true">
+            <i />
+          </div>
         )}
-        <Button variant="ghost" onClick={onCancel}>
+
+        <Button variant="ghost" size="sm" onClick={onCancel}>
           Cancel
         </Button>
       </div>
-      <ul className="mm-tips">
-        <li><kbd>WASD</kbd> move · <kbd>Mouse</kbd> aim · <kbd>Click</kbd> shoot</li>
-        <li><kbd>E</kbd> loot / open · <kbd>R</kbd> reload · <kbd>Space</kbd> dash · <kbd>1-3</kbd> weapons</li>
-        <li><kbd>Tab</kbd> inventory · <kbd>M</kbd> map · <kbd>H</kbd> medkit · <kbd>G</kbd> armor plate</li>
-      </ul>
+
+      <div className="raid-foot">
+        <SeasonBadge compact />
+        <p className="raid-slogan">{BRAND.slogan.join(' ')}</p>
+        <ul className="raid-tips">
+          <li><kbd>WASD</kbd> move <kbd>Mouse</kbd> aim <kbd>Click</kbd> shoot</li>
+          <li><kbd>E</kbd> loot <kbd>R</kbd> reload <kbd>Space</kbd> dash <kbd>Tab</kbd> bag <kbd>M</kbd> map</li>
+        </ul>
+      </div>
     </div>
   );
 }

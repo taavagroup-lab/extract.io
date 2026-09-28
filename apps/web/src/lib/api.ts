@@ -8,7 +8,9 @@ import type {
   ListingQuery,
   Paginated,
   ProfileDTO,
+  PublicConfigDTO,
   SeasonDTO,
+  ServerStatusDTO,
   TransactionDTO,
   UserDTO,
   WalletDTO,
@@ -77,10 +79,13 @@ export const api = {
   buy: (id: string, idempotencyKey: string) =>
     request<TransactionDTO>('POST', `/marketplace/listings/${id}/buy`, undefined, { 'idempotency-key': idempotencyKey }),
 
-  leaderboard: (category: LeaderboardCategory, period: LeaderboardPeriod) =>
-    request<LeaderboardDTO>('GET', `/leaderboard${qs({ category, period })}`),
+  leaderboard: (category: LeaderboardCategory, period: LeaderboardPeriod, page = 1, pageSize = 25) =>
+    request<LeaderboardDTO>('GET', `/leaderboard${qs({ category, period, page, pageSize })}`),
   profile: () => request<ProfileDTO>('GET', '/profile'),
   season: () => request<SeasonDTO>('GET', '/seasons/current'),
+
+  config: () => request<PublicConfigDTO>('GET', '/config'),
+  status: () => request<ServerStatusDTO>('GET', '/status'),
 
   wallet: () => request<{ wallet: WalletDTO | null }>('GET', '/wallet'),
   connectWallet: () => request<WalletDTO>('POST', '/wallet/connect', {}),

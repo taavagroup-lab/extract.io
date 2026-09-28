@@ -19,6 +19,7 @@ export function createHttpHandler(manager: MatchManager, metrics: Metrics, confi
     try {
       if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true });
       if (req.method === 'GET' && url.pathname === '/metrics') return json(res, 200, metrics.snapshot(manager.stats()));
+      if (req.method === 'GET' && url.pathname === '/status') return json(res, 200, manager.publicStatus());
 
       if (url.pathname.startsWith('/dev/')) {
         if (!config.devTools) return json(res, 404, { error: 'not_found' });

@@ -66,7 +66,7 @@ export type ClientMessage =
 /**
  * Player network tuple:
  * [id, x, y, rot*100, hp, maxHp, armor, weaponIndex(-1 none), statusIndex, flags]
- * flags: 1 = bounty target, 2 = extracting, 4 = using item, 8 = reloading, 16 = disconnected
+ * flags: 1 = bounty target, 2 = extracting, 4 = using item, 8 = reloading, 16 = disconnected, 32 = kingpin
  */
 export type PlayerNet = [number, number, number, number, number, number, number, number, number, number];
 
@@ -76,6 +76,8 @@ export const PLAYER_FLAGS = {
   USING_ITEM: 4,
   RELOADING: 8,
   DISCONNECTED: 16,
+  /** Carries a KINGPIN-tier bag (see THREAT_CONFIG). */
+  KINGPIN: 32,
 } as const;
 
 export interface PlayerEnter {
@@ -130,7 +132,9 @@ export type GameEvent =
   | { e: 'extractAlert'; zoneId: string; x: number; y: number }
   | { e: 'extract'; state: 'started' | 'cancelled'; zoneId: string; reason?: string }
   | { e: 'notice'; text: string }
-  | { e: 'bounty'; name: string; bountyCents: Cents };
+  | { e: 'bounty'; name: string; bountyCents: Cents }
+  /** Someone's bag reached the KINGPIN tier (value is server authoritative). */
+  | { e: 'kingpin'; playerId: EntityId; name: string; bagCents: Cents };
 
 export interface SnapshotMessage {
   t: 'snap';

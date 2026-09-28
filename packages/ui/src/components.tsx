@@ -1,6 +1,6 @@
 import { RARITY_CONFIG } from '@extract/game-config';
 import type { ItemType, Rarity } from '@extract/game-types';
-import { formatCents } from '@extract/shared';
+import { formatAmount, formatCents } from '@extract/shared';
 import { useId, type ButtonHTMLAttributes, type ReactNode } from 'react';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
@@ -31,14 +31,34 @@ export function Panel({ title, actions, children, className = '' }: { title?: Re
 export function RarityBadge({ rarity }: { rarity: Rarity }) {
   const cfg = RARITY_CONFIG[rarity];
   return (
-    <span className="x-rarity" style={{ color: cfg.color, borderColor: `${cfg.color}66`, background: `${cfg.color}14` }}>
+    <span className="x-rarity" style={{ color: cfg.color }}>
       {cfg.label}
     </span>
   );
 }
 
-export function Money({ cents, className = '' }: { cents: number; className?: string }) {
-  return <span className={`x-money ${className}`}>{formatCents(cents)}</span>;
+/**
+ * Amount of the reference currency. With `unit` the amount is shown bare
+ * with a small unit label ("84.72 TEST USDC"); without it as "$84.72".
+ */
+export function Money({ cents, unit, className = '' }: { cents: number; unit?: string; className?: string }) {
+  if (unit === undefined) return <span className={`x-money ${className}`}>{formatCents(cents)}</span>;
+  return (
+    <span className={`x-money ${className}`}>
+      {formatAmount(cents)}
+      <small className="x-money__unit">{unit}</small>
+    </span>
+  );
+}
+
+export function Stat({ label, value, hint, accent = false }: { label: ReactNode; value: ReactNode; hint?: ReactNode; accent?: boolean }) {
+  return (
+    <div className={`x-stat ${accent ? 'x-stat--accent' : ''}`}>
+      <span className="x-stat__label">{label}</span>
+      <span className="x-stat__value">{value}</span>
+      {hint !== undefined && <span className="x-stat__hint">{hint}</span>}
+    </div>
+  );
 }
 
 export function Tabs<T extends string>({
@@ -85,10 +105,10 @@ export function EmptyState({ title, children }: { title: string; children?: Reac
   );
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
-    <div className="x-modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="x-modal__card">
+    <div className="x-modal" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className={`x-modal__card ${wide ? 'x-modal__card--wide' : ''}`}>
         <header className="x-modal__header">
           <h3>{title}</h3>
           <button className="x-modal__close" aria-label="Close" onClick={onClose}>

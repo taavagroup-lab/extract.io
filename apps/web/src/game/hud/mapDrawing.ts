@@ -127,6 +127,31 @@ export function drawMap(ctx: CanvasRenderingContext2D, map: MapData, global: Mat
         ctx.fillText(`${b.name} · HVT`, b.x * s, b.y * s);
       }
     }
+    // KINGPIN: approximate (fuzzed) position of a high-value bag.
+    for (const k of global.kingpins ?? []) {
+      const r = Math.max(7, k.radius * s);
+      ctx.save();
+      ctx.strokeStyle = `rgba(245,197,66,${0.55 + 0.4 * pulse})`;
+      ctx.fillStyle = 'rgba(245,197,66,0.1)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.arc(k.x * s, k.y * s, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = '#f5c542';
+      ctx.beginPath();
+      const cx = k.x * s;
+      const cy = k.y * s;
+      ctx.moveTo(cx, cy - 5);
+      ctx.lineTo(cx + 4, cy);
+      ctx.lineTo(cx, cy + 5);
+      ctx.lineTo(cx - 4, cy);
+      ctx.closePath();
+      ctx.fill();
+      if (o.labels) ctx.fillText(`KINGPIN · ${k.name}`, cx, cy - r - 6);
+    }
   }
 
   if (o.selfX !== null && o.selfY !== null) {

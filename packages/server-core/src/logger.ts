@@ -21,6 +21,7 @@ export const LOG_EVENTS = [
   'marketplace_sale',
   'supply_drop',
   'bounty_placed',
+  'kingpin_detected',
   'persistence_error',
   'security_violation',
 ] as const;

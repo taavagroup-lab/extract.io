@@ -1,4 +1,4 @@
-import { ECONOMY_CONFIG } from '@extract/game-config';
+import { ECONOMY_CONFIG, THREAT_CONFIG } from '@extract/game-config';
 import type { LeaderboardCategory, LeaderboardPeriod } from '@extract/game-types';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { isUniqueViolation, type Tx } from './client';
@@ -31,6 +31,8 @@ export interface PlayerResultInput {
   /** Items transferred into the persistent account inventory. */
   items: PersistItem[];
   extraction: { pointId: string; valueCents: number } | null;
+  /** Season XP (computed by the game server with the shared formula). */
+  xp: number;
 }
 
 export interface GrantedItem {
@@ -73,6 +75,8 @@ export interface MatchFinishInput {
 }
 
 const PERIODS: LeaderboardPeriod[] = ['WEEKLY', 'SEASON', 'ALL_TIME'];
+const TOP_RARITIES = new Set(['LEGENDARY', 'MYTHIC']);
+const KINGPIN_MIN_CENTS = THREAT_CONFIG.tiers.find((t) => t.id === 'KINGPIN')!.minCents;
 
 /**
  * Persists match lifecycle and player results. Every write that grants value
@@ -138,6 +142,7 @@ export class MatchResultRepository {
         lostValueCents: input.lostValueCents,
         bountyEarnedCents: input.bountyEarnedCents,
         survivedMs: Math.round(input.survivedMs),
+        xp: Math.max(0, Math.round(input.xp)),
       },
     });
 
@@ -153,11 +158,15 @@ export class MatchResultRepository {
     });
 
     // 2. Items.
-    const { granted, compensationCents } = await this.grantItems(tx, inventory.id, input);
+    const { granted, compensationCents, topRarityUnits } = await this.grantItems(tx, inventory.id, input);
 
     // 3. Extraction record.
     const extracted = input.outcome === 'EXTRACTED';
     const extractedValue = extracted && input.extraction ? input.extraction.valueCents : 0;
+    const legendaryExtracted = extracted ? topRarityUnits : 0;
+    const kingpinExtraction = extracted && extractedValue >= KINGPIN_MIN_CENTS ? 1 : 0;
+    const xp = Math.max(0, Math.round(input.xp));
+    const playtimeSec = Math.max(0, Math.floor(input.survivedMs / 1000));
     if (extracted && input.extraction) {
       await tx.extraction.create({
         data: {
@@ -184,6 +193,10 @@ export class MatchResultRepository {
         "highestKillStreak" = GREATEST("highestKillStreak", ${input.kills}),
         "bountyKills" = "bountyKills" + ${input.bountyKills},
         "bountyEarnedCents" = "bountyEarnedCents" + ${input.bountyEarnedCents},
+        "legendaryExtracted" = "legendaryExtracted" + ${legendaryExtracted},
+        "kingpinExtractions" = "kingpinExtractions" + ${kingpinExtraction},
+        "totalXp" = "totalXp" + ${xp},
+        "totalPlaytimeSec" = "totalPlaytimeSec" + ${playtimeSec},
         "balanceCents" = "balanceCents" + ${credit},
         "updatedAt" = NOW()
       WHERE "userId" = ${input.userId}`;
@@ -196,6 +209,8 @@ export class MatchResultRepository {
       ['HIGHEST_SINGLE_EXTRACTION', extractedValue, 'max'],
       ['HIGHEST_KILL_STREAK', input.kills, 'max'],
       ['BOUNTY_KILLS', input.bountyKills, 'sum'],
+      ['SEASON_XP', xp, 'sum'],
+      ['KINGPIN_EXTRACTIONS', kingpinExtraction, 'sum'],
     ];
     const now = new Date();
     for (const [category, value, mode] of stats) {
@@ -220,10 +235,10 @@ export class MatchResultRepository {
     tx: Tx,
     inventoryId: string,
     input: PlayerResultInput,
-  ): Promise<{ granted: GrantedItem[]; compensationCents: number }> {
+  ): Promise<{ granted: GrantedItem[]; compensationCents: number; topRarityUnits: number }> {
     const granted: GrantedItem[] = [];
     let compensationCents = 0;
-    if (input.items.length === 0) return { granted, compensationCents };
+    if (input.items.length === 0) return { granted, compensationCents, topRarityUnits: 0 };
 
     const defs = await tx.itemDefinition.findMany({ where: { id: { in: input.items.map((i) => i.itemId) } } });
     const byId = new Map(defs.map((d) => [d.id, d]));
@@ -273,7 +288,9 @@ export class MatchResultRepository {
         granted.push({ itemId: def.id, qty: item.qty, serialNumber: null });
       }
     }
-    return { granted, compensationCents };
+    // Counts what actually landed in the stash (limited items without supply left do not count).
+    const topRarityUnits = granted.reduce((n, g) => n + (TOP_RARITIES.has(byId.get(g.itemId)?.rarity ?? '') ? g.qty : 0), 0);
+    return { granted, compensationCents, topRarityUnits };
   }
 }
 

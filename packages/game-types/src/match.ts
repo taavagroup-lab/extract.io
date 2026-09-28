@@ -46,6 +46,16 @@ export interface BountyMarker {
   kills: number;
 }
 
+/** Approximate position of a KINGPIN-tier bag, refreshed periodically. */
+export interface KingpinMarker {
+  playerId: EntityId;
+  name: string;
+  x: number;
+  y: number;
+  radius: number;
+  bagCents: Cents;
+}
+
 /** Match-wide state every client receives (only when it changes). */
 export interface MatchGlobalState {
   matchId: string;
@@ -59,6 +69,7 @@ export interface MatchGlobalState {
   extractionZones: ExtractionState[];
   supplyDrops: SupplyDropState[];
   bounties: BountyMarker[];
+  kingpins: KingpinMarker[];
 }
 
 /** Spec alias. */
