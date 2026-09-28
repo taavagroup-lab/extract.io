@@ -1,22 +1,27 @@
 import { weaponFromIndex } from '@extract/game-config';
 import { PLAYER_FLAGS, type WeaponId } from '@extract/game-types';
 import * as THREE from 'three';
-import { glow, mat } from '../materials';
+import { decalMat, glow, mat } from '../materials';
 import type { CharacterSkin } from '../skins';
 import { COLORS } from '../style';
-import { Textures } from '../textures';
+import { Decals, Textures } from '../textures';
 import { weaponModel } from './weapons';
 
-const sphere = new THREE.SphereGeometry(1, 20, 14);
+const sphere = new THREE.SphereGeometry(1, 18, 12);
+const lowSphere = new THREE.SphereGeometry(1, 12, 8);
 const cube = new THREE.BoxGeometry(1, 1, 1);
 const capsule = new THREE.CapsuleGeometry(1, 1, 4, 10);
+const earCup = new THREE.CylinderGeometry(1, 1, 1, 10);
+const antennaGeo = new THREE.CylinderGeometry(0.35, 0.35, 1, 5);
 const ring = new THREE.RingGeometry(0.86, 1, 48);
 const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 32, 1, true);
 const gemGeo = new THREE.OctahedronGeometry(1, 0);
-const KINGPIN_GOLD = 0xf5c542;
+const helmetGeo = new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.55);
+const flatQuad = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 const OUTLINE = new THREE.MeshBasicMaterial({ color: 0x05070a, side: THREE.BackSide });
+const KINGPIN_GOLD = 0xf5c542;
 /** Visual scale so the model covers the 22-unit hitbox. */
-const MODEL_SCALE = 1.2;
+const MODEL_SCALE = 1.18;
 
 function mesh(geo: THREE.BufferGeometry, material: THREE.Material, scale: [number, number, number], pos: [number, number, number], shadow = true): THREE.Mesh {
   const m = new THREE.Mesh(geo, material);
@@ -26,30 +31,36 @@ function mesh(geo: THREE.BufferGeometry, material: THREE.Material, scale: [numbe
   return m;
 }
 
-/** A limb between two points in the XZ plane at height y. */
-function limb(material: THREE.Material, from: [number, number], to: [number, number], y: number, radius: number): THREE.Group {
-  const g = new THREE.Group();
-  const dx = to[0] - from[0];
-  const dz = to[1] - from[1];
-  const len = Math.hypot(dx, dz);
-  // Unit capsule is 3 tall (1 body + 2 caps): scale Y by len/3 for the full limb length.
-  const m = mesh(capsule, material, [radius, len / 3, radius], [len / 2, 0, 0]);
-  m.rotation.z = Math.PI / 2;
-  g.add(m);
-  g.position.set(from[0], y, from[1]);
-  g.rotation.y = -Math.atan2(dz, dx);
-  return g;
+/** Capsule between two points (any direction). */
+function bone(material: THREE.Material, from: THREE.Vector3, to: THREE.Vector3, radius: number): THREE.Mesh {
+  const dir = to.clone().sub(from);
+  const len = dir.length();
+  // Unit capsule is 3 tall (1 body + 2 caps): scale Y by len/3 for the full length.
+  const m = new THREE.Mesh(capsule, material);
+  m.scale.set(radius, Math.max(0.01, len / 3), radius);
+  m.position.copy(from).addScaledVector(dir, 0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  m.castShadow = true;
+  return m;
+}
+
+interface Leg {
+  pivot: THREE.Group;
 }
 
 /**
- * Top-down 3D operator: vest, backpack, helmet with glowing visor, arms,
- * weapon, animated boots. Faces +X locally; the body group rotates to aim.
+ * Top-down 3D operator: plate carrier with pouches, backpack with antenna,
+ * helmet with rails / NVG mount and glowing goggles, shoulder pads, legs with
+ * knee pads and boots, two-handed weapon hold. Faces +X locally; the body
+ * group rotates to aim. Animations: walk, idle breathing, recoil, reload,
+ * hit flinch and a death fall.
  */
 export class CharacterModel {
   readonly root = new THREE.Group();
   private readonly body = new THREE.Group();
+  private readonly upper = new THREE.Group();
   private readonly torsoMat: THREE.MeshStandardMaterial;
-  private readonly feet: THREE.Mesh[] = [];
+  private readonly legs: Leg[] = [];
   private readonly gunHolder = new THREE.Group();
   private readonly flash: THREE.Sprite;
   private readonly bountyRing: THREE.Mesh;
@@ -59,14 +70,18 @@ export class CharacterModel {
   /** KINGPIN: gold ring + floating gem (visible to everyone nearby). */
   private readonly kingpinRing: THREE.Mesh;
   private readonly kingpinGem: THREE.Mesh;
+  private readonly markers: THREE.Mesh[];
   private weapon: WeaponId | null | undefined = undefined;
   private muzzle = 20;
-  private phase = 0;
+  private phase = Math.random() * 10;
   private lastX = NaN;
   private lastY = NaN;
   private recoil = 0;
   private flashT = 0;
   private hitT = 0;
+  private reloadT = 0;
+  private deathT = -1;
+  private deathSide = 1;
   /** Smoothed ground speed (units/s), derived from rendered movement. */
   speed = 0;
 
@@ -74,50 +89,97 @@ export class CharacterModel {
     readonly skin: CharacterSkin,
     readonly isSelf: boolean,
   ) {
-    const vest = mat(skin.vest, { rough: 0.65 });
-    const vestDark = mat(skin.vestDark, { rough: 0.75 });
-    const helmet = mat(skin.helmet, { rough: 0.35, metal: 0.4 });
+    const fabric = Textures.burlap();
+    const vest = mat(skin.vest, { rough: 0.8, map: fabric.map, normalMap: fabric.normalMap, normal: 0.6 });
+    const gear = mat(skin.vestDark, { rough: 0.8 });
+    const shirt = mat(skin.shirt, { rough: 0.85 });
+    const pants = mat(skin.pants, { rough: 0.85 });
+    const helmet = mat(skin.helmet, { rough: 0.5, metal: 0.25 });
     const gloves = mat(skin.gloves, { rough: 0.8 });
+    const boots = mat(skin.boots, { rough: 0.7 });
     const skinMat = mat(skin.skinTone, { rough: 0.7 });
+    const metal = mat(0x1d2024, { rough: 0.4, metal: 0.8 });
     const visor = glow(skin.visor, 1, null, 2.6);
-    this.torsoMat = new THREE.MeshStandardMaterial({ color: skin.vest, roughness: 0.6, emissive: 0xff2030, emissiveIntensity: 0 });
+    this.torsoMat = new THREE.MeshStandardMaterial({ color: skin.shirt, roughness: 0.8, emissive: 0xff2030, emissiveIntensity: 0 });
 
     const b = this.body;
-    // Inverted-hull outlines keep the silhouette readable on any ground.
-    const outline = (scale: [number, number, number], pos: [number, number, number]) => {
-      const m = mesh(sphere, OUTLINE, scale, pos, false);
-      b.add(m);
-    };
-    outline([14.6, 14.2, 20.6], [0, 22, 0]);
-    outline([13, 10, 13], [0.5, 40, 0]);
-    b.add(mesh(sphere, this.torsoMat, [13, 13, 19], [0, 22, 0]));
-    b.add(mesh(cube, vestDark, [7, 12, 24], [8, 24, 0]));
-    b.add(mesh(cube, vestDark, [12, 16, 20], [-13, 24, 0]));
-    b.add(mesh(cube, visor, [7, 1, 3], [-13, 32.6, 0], false));
-    b.add(mesh(sphere, skinMat, [9.5, 9.5, 9.5], [2, 36, 0]));
-    b.add(mesh(sphere, helmet, [11.5, 8.5, 11.5], [0.5, 40, 0]));
-    b.add(mesh(cube, visor, [3, 3.6, 15], [9.5, 38.5, 0], false));
-    b.add(limb(vest, [2, 13], [18, 5], 26, 5));
-    b.add(limb(vest, [2, -13], [26, -2], 26, 5));
-    b.add(mesh(sphere, gloves, [5, 5, 5], [18, 26, 5]));
-    b.add(mesh(sphere, gloves, [5, 5, 5], [26, 26, -2]));
-    for (const side of [-1, 1]) {
-      const foot = mesh(cube, gloves, [11, 5, 7], [0, 3, side * 8]);
-      this.feet.push(foot);
-      b.add(foot);
-    }
-    this.gunHolder.position.set(16, 27, 1.5);
-    b.add(this.gunHolder);
+    const u = this.upper;
+    b.add(u);
 
-    this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: Textures.radial(), color: 0xffd27a, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
-    this.flash.scale.set(34, 34, 1);
+    // Legs (pivot at the hip, swing around Z).
+    for (const side of [-1, 1]) {
+      const pivot = new THREE.Group();
+      pivot.position.set(0, 16, side * 5.5);
+      pivot.add(
+        bone(pants, new THREE.Vector3(0, 0, 0), new THREE.Vector3(1.5, -7, 0), 3.8),
+        bone(pants, new THREE.Vector3(1.5, -7, 0), new THREE.Vector3(0, -13, 0), 3.4),
+        mesh(cube, gear, [3, 3.6, 4.6], [3.8, -7, 0]),
+        mesh(cube, boots, [9, 4.4, 5.6], [1.6, -14, 0]),
+      );
+      b.add(pivot);
+      this.legs.push({ pivot });
+    }
+    // Hips + belt.
+    u.add(mesh(sphere, pants, [8, 5, 10], [0, 17, 0]));
+    u.add(mesh(cube, gear, [11, 2.4, 19], [0, 19.5, 0]));
+
+    // Torso with outline, plate carrier, pouches.
+    u.add(mesh(sphere, OUTLINE, [12.8, 12.6, 16.6], [0, 26, 0], false));
+    u.add(mesh(sphere, this.torsoMat, [11, 11, 14.5], [0, 26, 0]));
+    u.add(mesh(cube, vest, [15, 15, 20], [0.8, 27, 0]));
+    for (const z of [-5.2, 0, 5.2]) u.add(mesh(cube, gear, [3, 5, 5], [8.6, 24, z]));
+    u.add(mesh(cube, gear, [2.4, 3, 7], [8.4, 30, 5]));
+    // Backpack + antenna.
+    u.add(mesh(cube, gear, [8, 15, 16], [-11, 27, 0]));
+    u.add(mesh(cube, vest, [3, 11, 12], [-15.2, 26, 0]));
+    u.add(mesh(antennaGeo, metal, [1, 20, 1], [-13, 42, -5]));
+    // Shoulder pads.
+    for (const side of [-1, 1]) u.add(mesh(lowSphere, vest, [6.2, 5, 6.4], [0.5, 33, side * 10.4]));
+
+    // Head: neck gaiter, face, helmet with rails and ear pro, NVG mount, goggles.
+    u.add(mesh(sphere, OUTLINE, [10.6, 9.2, 10.6], [1, 40, 0], false));
+    u.add(mesh(sphere, gear, [6.4, 4, 6.4], [1, 34.5, 0]));
+    u.add(mesh(sphere, skinMat, [7.8, 8.2, 7.8], [2, 38, 0]));
+    u.add(mesh(helmetGeo, helmet, [9.8, 9.2, 9.8], [0.6, 38.8, 0]));
+    for (const side of [-1, 1]) {
+      u.add(mesh(cube, metal, [8, 1.8, 1.2], [0.8, 41, side * 9]));
+      u.add(mesh(earCup, gear, [2.8, 2.4, 2.8], [1, 37.5, side * 8.2]));
+    }
+    u.add(mesh(cube, metal, [3.2, 3.2, 5], [8.6, 43, 0]));
+    u.add(mesh(cube, OUTLINE, [4, 3.4, 13], [8.4, 38, 0], false));
+    u.add(mesh(cube, visor, [2.2, 2.6, 12], [9.2, 38.2, 0], false));
+
+    // Arms: right hand on the grip, left hand on the handguard.
+    const rShoulder = new THREE.Vector3(1, 31, -10);
+    const lShoulder = new THREE.Vector3(1, 31, 10);
+    const rElbow = new THREE.Vector3(8, 25, -11);
+    const lElbow = new THREE.Vector3(13, 26, 6);
+    const rHand = new THREE.Vector3(15, 26, -3);
+    const lHand = new THREE.Vector3(25, 27, 0.5);
+    u.add(bone(shirt, rShoulder, rElbow, 3.4), bone(shirt, rElbow, rHand, 3));
+    u.add(bone(shirt, lShoulder, lElbow, 3.4), bone(shirt, lElbow, lHand, 3));
+    u.add(mesh(sphere, gloves, [3.4, 3.4, 3.4], [rHand.x, rHand.y, rHand.z]));
+    u.add(mesh(sphere, gloves, [3.4, 3.4, 3.4], [lHand.x, lHand.y, lHand.z]));
+
+    this.gunHolder.position.set(14, 27.5, -1.5);
+    u.add(this.gunHolder);
+
+    this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: Textures.flash(), color: 0xffd8a0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    this.flash.scale.set(40, 40, 1);
     this.flash.visible = false;
     this.gunHolder.add(this.flash);
 
     this.body.scale.setScalar(MODEL_SCALE);
     this.root.add(this.body);
 
-    // Ground rings: self marker, bounty, extraction, disconnected.
+    // Soft contact shadow under the feet.
+    const contact = new THREE.Mesh(flatQuad, decalMat('shade', Decals.softShadow(), 0x000000, 0.55));
+    contact.scale.set(48, 1, 48);
+    contact.position.y = 2.2;
+    contact.renderOrder = 1;
+    this.root.add(contact);
+
+    // Ground rings: self marker, bounty, extraction, disconnected, kingpin.
     const flat = (color: number, radius: number, opacity: number, y: number): THREE.Mesh => {
       const m = new THREE.Mesh(ring, glow(color, opacity, null, 1.6));
       m.rotation.x = -Math.PI / 2;
@@ -125,18 +187,19 @@ export class CharacterModel {
       m.position.y = y;
       return m;
     };
-    if (isSelf) this.root.add(flat(COLORS.self, 30, 0.55, 1.8));
-    this.bountyRing = flat(COLORS.danger, 38, 0.9, 2);
-    this.extractRing = flat(COLORS.extraction, 34, 0.9, 2.2);
-    this.disconnectRing = flat(0x9ca3af, 32, 0.6, 2.4);
-    this.kingpinRing = flat(KINGPIN_GOLD, 46, 0.85, 2.6);
+    if (isSelf) this.root.add(flat(COLORS.self, 30, 0.55, 2.6));
+    this.bountyRing = flat(COLORS.danger, 38, 0.9, 2.8);
+    this.extractRing = flat(COLORS.extraction, 34, 0.9, 3);
+    this.disconnectRing = flat(0x9ca3af, 32, 0.6, 3.2);
+    this.kingpinRing = flat(KINGPIN_GOLD, 46, 0.85, 3.4);
     this.kingpinGem = new THREE.Mesh(gemGeo, glow(KINGPIN_GOLD, 0.95, null, 2.4));
     this.kingpinGem.scale.set(5, 8, 5);
-    this.kingpinGem.position.y = 74;
+    this.kingpinGem.position.y = 76;
     this.extractBeam = new THREE.Mesh(beamGeo, glow(COLORS.extraction, 0.55, Textures.beam(), 1.4));
     this.extractBeam.scale.set(30, 160, 30);
     this.extractBeam.position.y = 80;
-    for (const m of [this.bountyRing, this.extractRing, this.disconnectRing, this.extractBeam, this.kingpinRing, this.kingpinGem]) {
+    this.markers = [this.bountyRing, this.extractRing, this.disconnectRing, this.extractBeam, this.kingpinRing, this.kingpinGem];
+    for (const m of this.markers) {
       m.visible = false;
       this.root.add(m);
     }
@@ -154,17 +217,49 @@ export class CharacterModel {
       this.gunHolder.add(w.group);
       this.muzzle = w.muzzle;
     }
-    this.flash.position.set(this.muzzle + 8, 1, 0);
+    this.flash.position.set(this.muzzle + 10, 1, 0);
   }
 
   /** Called when this character fires (bullet spawn seen). */
   fire(): void {
     this.recoil = 1;
     this.flashT = 1;
+    this.flash.material.rotation = Math.random() * Math.PI;
+    const s = 34 + Math.random() * 14;
+    this.flash.scale.set(s, s, 1);
   }
 
   hit(): void {
     this.hitT = 1;
+  }
+
+  /** Starts the death fall; `side` picks which way the body topples. */
+  die(side: number): void {
+    if (this.deathT >= 0) return;
+    this.deathT = 0;
+    this.deathSide = side >= 0 ? 1 : -1;
+    for (const m of this.markers) m.visible = false;
+    this.flash.visible = false;
+  }
+
+  get dead(): boolean {
+    return this.deathT >= 0;
+  }
+
+  /** Advances the death animation; returns false once the body should be removed. */
+  updateDeath(dt: number): boolean {
+    this.deathT += dt;
+    const fall = Math.min(1, this.deathT / 0.42);
+    const ease = 1 - Math.pow(1 - fall, 3);
+    // Topple sideways, knees buckle, gun drops.
+    this.body.rotation.x = this.deathSide * ease * 1.45;
+    this.body.position.y = -ease * 4;
+    this.upper.rotation.z = -ease * 0.3;
+    this.gunHolder.rotation.z = -ease * 0.9;
+    for (const l of this.legs) l.pivot.rotation.z = ease * 0.5;
+    const fade = this.deathT > 4 ? Math.max(0, 1 - (this.deathT - 4) / 1.2) : 1;
+    this.root.position.y = -(1 - fade) * 20;
+    return fade > 0;
   }
 
   update(x: number, y: number, rot: number, flags: number, dt: number, time: number): void {
@@ -173,33 +268,47 @@ export class CharacterModel {
 
     // Walk cycle from actual displacement (works for predicted and interpolated movement).
     const moved = Number.isNaN(this.lastX) ? 0 : Math.hypot(x - this.lastX, y - this.lastY);
+    const heading = moved > 0.01 ? Math.atan2(y - this.lastY, x - this.lastX) : rot;
     this.lastX = x;
     this.lastY = y;
     const instant = dt > 0 && moved < 60 ? moved / dt : 0;
     this.speed += (instant - this.speed) * Math.min(1, dt * 12);
     const speed = this.speed;
-    if (speed > 20 && moved < 60) this.phase += moved * 0.11;
-    const stride = speed > 20 ? 7 : 0;
+    const walking = speed > 20 && moved < 60;
+    if (walking) this.phase += moved * 0.1;
+    // Legs swing along the travel direction relative to where the body faces.
+    const rel = walking ? heading - rot : 0;
+    const fwd = Math.cos(rel);
+    const amp = walking ? Math.min(1, speed / 240) * 0.75 : 0;
     const s = Math.sin(this.phase);
-    const f0 = this.feet[0]!;
-    const f1 = this.feet[1]!;
-    f0.position.x += (s * stride - f0.position.x) * Math.min(1, dt * 18);
-    f1.position.x += (-s * stride - f1.position.x) * Math.min(1, dt * 18);
-    this.body.position.y = speed > 20 ? Math.abs(Math.cos(this.phase)) * 1.8 : 0;
-    // Lean slightly into the movement direction.
-    const lean = Math.min(1, speed / 260) * 0.08;
-    this.body.rotation.z = -lean;
+    this.legs.forEach((l, i) => {
+      const sw = i === 0 ? s : -s;
+      l.pivot.rotation.z += (sw * amp * Math.sign(fwd || 1) * Math.abs(fwd) - l.pivot.rotation.z) * Math.min(1, dt * 16);
+      l.pivot.rotation.x += (Math.sin(rel) * amp * 0.5 * sw - l.pivot.rotation.x) * Math.min(1, dt * 16);
+    });
+    const bob = walking ? Math.abs(Math.cos(this.phase)) * 1.6 : Math.sin(time / 650) * 0.35;
+    this.upper.position.y = bob;
+    this.body.rotation.z = -Math.min(1, speed / 260) * 0.08 * fwd;
 
-    // Recoil + muzzle flash.
-    this.recoil = Math.max(0, this.recoil - dt * 12);
-    this.gunHolder.position.x = 16 - this.recoil * 5;
-    this.flashT = Math.max(0, this.flashT - dt * 20);
+    // Recoil kick (gun + shoulders) and muzzle flash.
+    this.recoil = Math.max(0, this.recoil - dt * 11);
+    this.gunHolder.position.x = 14 - this.recoil * 5;
+    this.upper.rotation.y = this.recoil * 0.06;
+    this.flashT = Math.max(0, this.flashT - dt * 22);
     this.flash.visible = this.flashT > 0;
     this.flash.material.opacity = this.flashT;
 
-    // Hit flash.
+    // Reload: weapon tilts down and rolls, then comes back.
+    const reloading = (flags & PLAYER_FLAGS.RELOADING) !== 0;
+    this.reloadT += ((reloading ? 1 : 0) - this.reloadT) * Math.min(1, dt * 10);
+    const wiggle = reloading ? Math.sin(time / 110) * 0.08 : 0;
+    this.gunHolder.rotation.z = -this.reloadT * 0.55 + wiggle;
+    this.gunHolder.rotation.x = this.reloadT * 0.5;
+
+    // Hit flinch + flash.
     this.hitT = Math.max(0, this.hitT - dt * 6);
-    this.torsoMat.emissiveIntensity = this.hitT * 2.2;
+    this.torsoMat.emissiveIntensity = this.hitT * 2.4;
+    this.upper.rotation.x = Math.sin(time / 30) * this.hitT * 0.08;
 
     const pulse = 0.5 + 0.5 * Math.sin(time / 180);
     this.bountyRing.visible = (flags & PLAYER_FLAGS.BOUNTY) !== 0;
@@ -219,7 +328,7 @@ export class CharacterModel {
       this.kingpinRing.rotation.z = -time / 900;
       this.kingpinRing.scale.setScalar(44 + pulse * 5);
       this.kingpinGem.rotation.y = time / 500;
-      this.kingpinGem.position.y = 74 + Math.sin(time / 260) * 3;
+      this.kingpinGem.position.y = 76 + Math.sin(time / 260) * 3;
     }
   }
 

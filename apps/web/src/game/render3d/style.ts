@@ -12,58 +12,71 @@ export const HEIGHT: Record<ObstacleStyle | 'border' | 'containerStack', number>
   vault: 96,
   crate_stack: 44,
   border: 130,
+  // Low cover sits just above gun height so shots visibly hit its top edge.
+  barrier: 30,
+  barrel: 34,
+  pallet: 30,
+  shelf: 70,
+  generator: 40,
+  vehicle: 36,
+  sandbag: 26,
+  fence: 64,
 };
 
 /** Height at which guns / bullets travel. */
 export const GUN_HEIGHT = 26;
 
+/**
+ * Palette: stylised tactical realism. Muted, slightly desaturated materials;
+ * colour is reserved for gameplay (rarity, extraction, danger, the player).
+ */
 export const COLORS = {
-  sky: 0xa8c4e6,
-  groundBounce: 0x2a2218,
-  sun: 0xffe0bd,
-  wall: 0x9aa1ab,
-  wallCap: 0xc9ced6,
-  border: 0x4b5260,
-  containerTints: [0xb4412f, 0x2f5fa8, 0x3f8b4f, 0xc27a1c, 0x6b6f78],
-  machine: 0x454c57,
-  pump: 0xc0262d,
-  vault: 0x3a3f48,
-  vaultTrim: 0xf5b301,
-  crateStack: 0x8a6a42,
-  rock: 0x7c828c,
-  treeCanopy: [0x2a5a30, 0x336b33, 0x244f29, 0x3c7236],
-  treeTrunk: 0x5a3d25,
+  background: 0x0d1115,
+  sky: 0x9fb6d8,
+  groundBounce: 0x3a2e24,
+  sun: 0xffc690,
+  rim: 0x6d8fbf,
+  wall: 0x9b9d9e,
+  wallBase: 0x55575a,
+  wallCap: 0x3b3f44,
+  border: 0x5e6268,
+  rock: 0x6f7378,
+  treeCanopy: [0x24442a, 0x2c5230, 0x1f3d25, 0x355a2f, 0x2a4a2c],
+  pine: [0x1c3524, 0x21402a, 0x183020, 0x284a30],
+  treeTrunk: 0x4a3524,
+  lamp: 0xffc98a,
+  lampCool: 0xa9d4ff,
   self: 0xb6f23d,
   extraction: 0x34d399,
   danger: 0xef4444,
   supply: 0xfb923c,
 };
 
-export type GroundKind = 'grass' | 'forest' | 'asphalt' | 'concrete' | 'planks' | 'tiles' | 'metal';
+export type GroundKind = 'field' | 'forest' | 'asphalt' | 'slab' | 'quay' | 'epoxy' | 'officeTiles' | 'parquet' | 'tread';
 
 export const ZONE_GROUND: Record<ZoneType, { kind: GroundKind; tint: number; tile: number }> = {
-  OPEN: { kind: 'grass', tint: 0xffffff, tile: 300 },
-  FOREST: { kind: 'forest', tint: 0xffffff, tile: 280 },
-  CITY: { kind: 'concrete', tint: 0xb7bcc4, tile: 256 },
-  FACTORY: { kind: 'concrete', tint: 0x9a968c, tile: 256 },
-  PORT: { kind: 'concrete', tint: 0x8c98a6, tile: 256 },
+  OPEN: { kind: 'field', tint: 0xffffff, tile: 320 },
+  FOREST: { kind: 'forest', tint: 0xffffff, tile: 300 },
+  CITY: { kind: 'slab', tint: 0xb4b7ba, tile: 320 },
+  FACTORY: { kind: 'slab', tint: 0xa39e93, tile: 320 },
+  PORT: { kind: 'quay', tint: 0xa7adb3, tile: 320 },
   GAS_STATION: { kind: 'asphalt', tint: 0xffffff, tile: 256 },
-  HIGH_VALUE: { kind: 'metal', tint: 0xb9a38a, tile: 120 },
+  HIGH_VALUE: { kind: 'tread', tint: 0xb9a38a, tile: 110 },
 };
 
 export const FLOOR_GROUND: Record<FloorPatch['style'], { kind: GroundKind; tint: number; tile: number; y: number }> = {
   road: { kind: 'asphalt', tint: 0xffffff, tile: 256, y: 1.2 },
-  concrete: { kind: 'concrete', tint: 0xd2d6dc, tile: 256, y: 1.4 },
-  dock: { kind: 'planks', tint: 0xb9aa98, tile: 220, y: 1.0 },
-  interior: { kind: 'tiles', tint: 0xd9dde3, tile: 120, y: 2.0 },
-  vault_floor: { kind: 'metal', tint: 0xc9a979, tile: 110, y: 2.0 },
+  concrete: { kind: 'slab', tint: 0xc9ccd0, tile: 256, y: 1.4 },
+  dock: { kind: 'quay', tint: 0xb2b6ba, tile: 320, y: 1.0 },
+  interior: { kind: 'epoxy', tint: 0xd0d6d3, tile: 256, y: 2.0 },
+  vault_floor: { kind: 'tread', tint: 0xc9a979, tile: 110, y: 2.0 },
   water: { kind: 'asphalt', tint: 0x2a5170, tile: 256, y: 0.8 },
 };
 
 export const CRATE_STYLE: Record<ContainerType, { color: number; trim: number; glow: number | null; size: number }> = {
   NORMAL: { color: 0xb08850, trim: 0x3a2a18, glow: null, size: 42 },
-  MILITARY: { color: 0x6b7f4a, trim: 0x22281a, glow: null, size: 44 },
-  RARE: { color: 0x3d6bc4, trim: 0x16254a, glow: 0x60a5fa, size: 44 },
-  LEGENDARY: { color: 0x2b2b30, trim: 0xf5b301, glow: 0xf5b301, size: 46 },
-  SUPPLY_DROP: { color: 0xe8590c, trim: 0x2a1406, glow: 0xfb923c, size: 58 },
+  MILITARY: { color: 0x5d6b43, trim: 0x22281a, glow: null, size: 44 },
+  RARE: { color: 0x3a4a60, trim: 0x16254a, glow: 0x60a5fa, size: 44 },
+  LEGENDARY: { color: 0x1e1f23, trim: 0xf5b301, glow: 0xf5b301, size: 46 },
+  SUPPLY_DROP: { color: 0xd8570d, trim: 0x2a1406, glow: 0xfb923c, size: 58 },
 };

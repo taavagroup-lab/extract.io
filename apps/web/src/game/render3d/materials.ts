@@ -39,9 +39,21 @@ export function withProximityFade(material: THREE.MeshStandardMaterial, inner = 
 
 const standardCache = new Map<string, THREE.MeshStandardMaterial>();
 
+export interface MatOptions {
+  rough?: number;
+  metal?: number;
+  emissive?: number;
+  emissiveIntensity?: number;
+  map?: THREE.Texture;
+  normalMap?: THREE.Texture;
+  /** Strength of the normal map (default 1). */
+  normal?: number;
+  flat?: boolean;
+}
+
 /** Cached PBR material by parameters (shared across all meshes). */
-export function mat(color: number, opts: { rough?: number; metal?: number; emissive?: number; emissiveIntensity?: number; map?: THREE.Texture; flat?: boolean } = {}): THREE.MeshStandardMaterial {
-  const key = `${color}|${opts.rough ?? 0.8}|${opts.metal ?? 0}|${opts.emissive ?? 0}|${opts.emissiveIntensity ?? 1}|${opts.map?.uuid ?? ''}|${opts.flat ? 1 : 0}`;
+export function mat(color: number, opts: MatOptions = {}): THREE.MeshStandardMaterial {
+  const key = `${color}|${opts.rough ?? 0.8}|${opts.metal ?? 0}|${opts.emissive ?? 0}|${opts.emissiveIntensity ?? 1}|${opts.map?.uuid ?? ''}|${opts.normalMap?.uuid ?? ''}|${opts.normal ?? 1}|${opts.flat ? 1 : 0}`;
   let m = standardCache.get(key);
   if (!m) {
     m = new THREE.MeshStandardMaterial({
@@ -51,10 +63,48 @@ export function mat(color: number, opts: { rough?: number; metal?: number; emiss
       emissive: opts.emissive ?? 0x000000,
       emissiveIntensity: opts.emissiveIntensity ?? 1,
       map: opts.map ?? null,
+      normalMap: opts.normalMap ?? null,
       flatShading: opts.flat ?? false,
     });
+    if (opts.normalMap) m.normalScale.setScalar(opts.normal ?? 1);
     standardCache.set(key, m);
   }
+  return m;
+}
+
+/** PBR material from a texture pair (albedo + normal). */
+export function surface(color: number, tex: { map: THREE.Texture; normalMap: THREE.Texture }, opts: Omit<MatOptions, 'map' | 'normalMap'> = {}): THREE.MeshStandardMaterial {
+  return mat(color, { ...opts, map: tex.map, normalMap: tex.normalMap });
+}
+
+const decalCache = new Map<string, THREE.Material>();
+
+export type DecalKind = 'shade' | 'paint' | 'additive' | 'wet';
+
+/**
+ * Floor decal materials (no depth write, polygon offset so they never fight
+ * the floor). shade = unlit darkening (contact shadows, grime, oil),
+ * paint = lit paint/markings, additive = fake light pools, wet = glossy puddles.
+ */
+export function decalMat(kind: DecalKind, map: THREE.Texture, color = 0xffffff, opacity = 1): THREE.Material {
+  const key = `${kind}|${map.uuid}|${color}|${opacity}`;
+  let m = decalCache.get(key);
+  if (m) return m;
+  const common = { map, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, opacity, side: THREE.DoubleSide };
+  switch (kind) {
+    case 'shade':
+      m = new THREE.MeshBasicMaterial({ ...common, color, fog: true });
+      break;
+    case 'additive':
+      m = new THREE.MeshBasicMaterial({ ...common, color, blending: THREE.AdditiveBlending, toneMapped: false });
+      break;
+    case 'wet':
+      m = new THREE.MeshStandardMaterial({ ...common, color, roughness: 0.06, metalness: 0.55 });
+      break;
+    default:
+      m = new THREE.MeshStandardMaterial({ ...common, color, roughness: 0.75 });
+  }
+  decalCache.set(key, m);
   return m;
 }
 
@@ -83,6 +133,8 @@ export function glow(color: number, opacity = 1, map: THREE.Texture | null = nul
 export function disposeMaterials(): void {
   for (const m of standardCache.values()) m.dispose();
   for (const m of glowCache.values()) m.dispose();
+  for (const m of decalCache.values()) m.dispose();
   standardCache.clear();
   glowCache.clear();
+  decalCache.clear();
 }

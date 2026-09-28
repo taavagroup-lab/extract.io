@@ -107,7 +107,7 @@ export class GameRenderer {
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.toneMappingExposure = 1.02;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.className = 'game-webgl';
@@ -115,12 +115,17 @@ export class GameRenderer {
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.35;
+    this.scene.environmentIntensity = 0.42;
     pmrem.dispose();
-    this.scene.background = new THREE.Color(0x0b0f14);
+    this.scene.background = new THREE.Color(COLORS.background);
 
-    this.scene.add(new THREE.HemisphereLight(COLORS.sky, COLORS.groundBounce, 1.0));
-    this.sun = new THREE.DirectionalLight(COLORS.sun, 2.9);
+    // Late-afternoon mood: warm low key light, cool sky fill, faint cool rim
+    // from the opposite side so shadowed faces keep their shape.
+    this.scene.add(new THREE.HemisphereLight(COLORS.sky, COLORS.groundBounce, 0.82));
+    const rim = new THREE.DirectionalLight(COLORS.rim, 0.55);
+    rim.position.set(900, 700, -900);
+    this.scene.add(rim);
+    this.sun = new THREE.DirectionalLight(COLORS.sun, 3.2);
     this.sun.castShadow = true;
     const sc = this.sun.shadow.camera;
     sc.left = -SHADOW_EXTENT;
@@ -596,7 +601,7 @@ export class GameRenderer {
     const lx = Math.round(this.camTarget.x / texel) * texel;
     const lz = Math.round(this.camTarget.z / texel) * texel;
     this.sun.target.position.set(lx, 0, lz);
-    this.sun.position.set(lx - 650, 1300, lz + 850);
+    this.sun.position.set(lx - 900, 1050, lz + 720);
   }
 
   dispose(): void {

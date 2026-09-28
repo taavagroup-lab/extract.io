@@ -14,6 +14,7 @@ const torus = new THREE.TorusGeometry(1, 0.22, 8, 24);
 const cone = new THREE.ConeGeometry(1, 1, 6);
 const disc = new THREE.PlaneGeometry(1, 1);
 const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 20, 1, true);
+const ringGeo = new THREE.RingGeometry(0.88, 1, 40);
 
 function p(geo: THREE.BufferGeometry, material: THREE.Material, s: [number, number, number], pos: [number, number, number], rot?: [number, number, number]): THREE.Mesh {
   const m = new THREE.Mesh(geo, material);
@@ -130,8 +131,10 @@ export class GroundItemModel {
   private readonly model: THREE.Group;
   private readonly glowDisc: THREE.Mesh;
   private readonly beam: THREE.Mesh | null = null;
+  private readonly halo: THREE.Mesh | null = null;
   private readonly phase = Math.random() * Math.PI * 2;
-  private readonly rank: number;
+  readonly rank: number;
+  readonly color: number;
 
   constructor(itemId: ItemId, x: number, y: number) {
     let t = templates.get(itemId);
@@ -142,6 +145,7 @@ export class GroundItemModel {
     this.model = t.clone();
     const def = getItemDef(itemId);
     const color = RARITY_CONFIG[def.rarity].colorHex;
+    this.color = color;
     this.rank = RARITY_CONFIG[def.rarity].rank;
 
     this.glowDisc = new THREE.Mesh(disc, glow(color, 0.3 + this.rank * 0.07, Textures.radial(), 0.8 + this.rank * 0.18));
@@ -157,6 +161,14 @@ export class GroundItemModel {
       this.beam.position.y = h / 2;
       this.root.add(this.beam);
     }
+    if (this.rank >= 3) {
+      // Legendary+: a slowly turning halo so the find reads as special from afar.
+      this.halo = new THREE.Mesh(ringGeo, glow(color, 0.7, null, 2.4));
+      this.halo.rotation.x = -Math.PI / 2;
+      this.halo.scale.setScalar(26);
+      this.halo.position.y = 3;
+      this.root.add(this.halo);
+    }
     this.root.position.set(x, 0, y);
   }
 
@@ -166,6 +178,10 @@ export class GroundItemModel {
     this.model.rotation.y = t * 0.9;
     const pulse = 0.85 + 0.15 * Math.sin(t * 3);
     this.glowDisc.scale.setScalar((46 + this.rank * 10) * pulse);
+    if (this.halo) {
+      this.halo.rotation.z = t * 0.8;
+      this.halo.scale.setScalar(24 + Math.sin(t * 2.4) * 3);
+    }
   }
 
   dispose(): void {

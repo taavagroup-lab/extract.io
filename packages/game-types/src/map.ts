@@ -22,7 +22,23 @@ export type ObstacleStyle =
   | 'machine'
   | 'pump'
   | 'vault'
-  | 'crate_stack';
+  | 'crate_stack'
+  /** Low concrete jersey barrier (cover). */
+  | 'barrier'
+  /** Group of oil drums. */
+  | 'barrel'
+  /** Pallet with wrapped goods. */
+  | 'pallet'
+  /** Warehouse storage rack. */
+  | 'shelf'
+  /** Industrial generator / power unit. */
+  | 'generator'
+  /** Abandoned vehicle (tint: 0 sedan, 1 van, 2 pickup). */
+  | 'vehicle'
+  /** Sandbag emplacement. */
+  | 'sandbag'
+  /** Solid metal site fence segment. */
+  | 'fence';
 
 export interface RectObstacle {
   kind: 'rect';

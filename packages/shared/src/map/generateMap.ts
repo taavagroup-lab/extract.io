@@ -40,6 +40,9 @@ class MapBuilder {
   readonly floors: FloorPatch[] = [];
   readonly crates: CrateSpawn[] = [];
   readonly spots: { x: number; y: number; zone: ZoneType }[] = [];
+  /** Factory hall interiors (storage racks go along their walls). */
+  readonly halls: Rect[] = [];
+  readonly roadRects: readonly Rect[];
   private nextId = 1;
   private readonly roads: Rect[];
   private readonly reserved: { x: number; y: number; r: number }[];
@@ -56,6 +59,48 @@ class MapBuilder {
     ];
     this.reserved = MAP_CONFIG.extractionPoints.map((p) => ({ x: p.x, y: p.y, r: EXTRACTION_CONFIG.radius + 50 }));
     for (const r of this.roads) this.floors.push({ ...r, style: 'road' });
+    this.roadRects = this.roads;
+  }
+
+  /** True when `r` keeps at least `gap` units of walkable space to every obstacle. */
+  clearOf(r: Rect, gap: number, ignore?: (o: Obstacle) => boolean): boolean {
+    return !this.obstacles.some((o) => {
+      if (ignore?.(o)) return false;
+      if (o.kind === 'rect') return rectsOverlap(r, o, gap);
+      const cx = Math.max(r.x, Math.min(o.x, r.x + r.w));
+      const cy = Math.max(r.y, Math.min(o.y, r.y + r.h));
+      return dist2(cx, cy, o.x, o.y) < (o.r + gap) * (o.r + gap);
+    });
+  }
+
+  /**
+   * Places a rectangular prop somewhere in `area` (randomly rotated by 90 degrees
+   * unless `rotate` is false) with a walkable gap to everything else, off
+   * roads, extraction zones and preferred loot spots. Returns null if no
+   * spot was found.
+   */
+  prop(
+    area: Rect,
+    w: number,
+    h: number,
+    style: ObstacleStyle,
+    opts: { gap?: number; allowRoad?: boolean; rotate?: boolean; tint?: number; avoid?: Rect[] } = {},
+  ): Rect | null {
+    const gap = opts.gap ?? MAP_CONFIG.generation.props.gap;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const flip = opts.rotate !== false && this.rng.chance(0.5);
+      const pw = flip ? h : w;
+      const ph = flip ? w : h;
+      if (area.w < pw || area.h < ph) return null;
+      const r = { x: this.rng.range(area.x, area.x + area.w - pw), y: this.rng.range(area.y, area.y + area.h - ph), w: pw, h: ph };
+      if (!opts.allowRoad && this.rectOnRoad(r, 16)) continue;
+      if (this.rectReserved(r) || opts.avoid?.some((a) => rectsOverlap(r, a, 0))) continue;
+      if (this.spots.some((sp) => pointInRect(sp.x, sp.y, { x: r.x - 45, y: r.y - 45, w: r.w + 90, h: r.h + 90 }))) continue;
+      if (!this.clearOf(r, gap)) continue;
+      this.rect(r.x, r.y, r.w, r.h, style, opts.tint);
+      return r;
+    }
+    return null;
   }
 
   rect(x: number, y: number, w: number, h: number, style: ObstacleStyle, tint?: number): void {
@@ -213,6 +258,7 @@ function buildFactory(b: MapBuilder): void {
       const doors: Side[] = vertical ? ['top', 'bottom'] : ['left', 'right'];
       if (b.rng.chance(0.5)) doors.push(vertical ? 'left' : 'top');
       const interior = b.building(hall, g.wallThickness, g.doorWidth, doors, 'interior', true);
+      b.halls.push(interior);
       // Machines in the interior quadrants (doors are centered, so the middle cross stays free).
       const quads = [
         { x: interior.x + 40, y: interior.y + 40 },
@@ -312,6 +358,101 @@ function buildOpenField(b: MapBuilder): void {
   b.scatterCircles(area, g.rocks, [16, 28], 'rock', zones);
 }
 
+const SIZES = {
+  barrier: [92, 20],
+  barrel: [36, 36],
+  pallet: [48, 48],
+  generator: [64, 40],
+  vehicle: [44, 92],
+  sandbag: [84, 22],
+  fence: [180, 10],
+  shelf: [150, 28],
+} as const;
+
+type PropStyle = keyof typeof SIZES;
+
+function scatterProps(b: MapBuilder, area: Rect, counts: Partial<Record<PropStyle, number>>, avoid: Rect[] = []): void {
+  for (const [style, n] of Object.entries(counts) as [PropStyle, number][]) {
+    if (style === 'shelf' || style === 'fence') continue;
+    const [w, h] = SIZES[style];
+    for (let i = 0; i < n; i++) b.prop(area, w, h, style, { tint: style === 'vehicle' ? b.rng.int(0, 2) : undefined, avoid });
+  }
+}
+
+/** Short fence runs just inside a zone edge (fenced lanes); gaps in between keep it open. */
+function edgeFences(b: MapBuilder, zone: Rect, count: number): void {
+  const [len, t] = SIZES.fence;
+  const strips: Rect[] = [
+    { x: zone.x + 20, y: zone.y + 30, w: t + 1, h: zone.h - 60 },
+    { x: zone.x + 30, y: zone.y + zone.h - 20 - t, w: zone.w - 60, h: t + 1 },
+  ];
+  for (let i = 0; i < count; i++) {
+    const strip = strips[i % strips.length]!;
+    const vertical = strip.w < strip.h;
+    b.prop(strip, vertical ? t : len, vertical ? len : t, 'fence', { rotate: false });
+  }
+}
+
+/** Storage racks along factory hall walls; the centred doors stay clear. */
+function hallShelves(b: MapBuilder, perHall: number): void {
+  const [len, depth] = SIZES.shelf;
+  const inset = 10;
+  for (const hall of b.halls) {
+    const slots: Rect[] = [
+      { x: hall.x + 26, y: hall.y + inset, w: len, h: depth },
+      { x: hall.x + hall.w - 26 - len, y: hall.y + inset, w: len, h: depth },
+      { x: hall.x + 26, y: hall.y + hall.h - inset - depth, w: len, h: depth },
+      { x: hall.x + hall.w - 26 - len, y: hall.y + hall.h - inset - depth, w: len, h: depth },
+      { x: hall.x + inset, y: hall.y + 26, w: depth, h: len },
+      { x: hall.x + hall.w - inset - depth, y: hall.y + hall.h - 26 - len, w: depth, h: len },
+    ];
+    let placed = 0;
+    for (const r of b.rng.shuffle(slots)) {
+      if (placed >= perHall) break;
+      // Racks stand against the wall; they may sit close to machines (a gap narrower
+      // than a player just reads as one block) but never overlap anything.
+      if (!b.clearOf(r, 1)) continue;
+      if (b.spots.some((sp) => pointInRect(sp.x, sp.y, { x: r.x - 10, y: r.y - 10, w: r.w + 20, h: r.h + 20 }))) continue;
+      b.rect(r.x, r.y, r.w, r.h, 'shelf');
+      placed++;
+    }
+  }
+}
+
+/** Wrecked vehicles parked along the road edges (lanes stay passable). */
+function roadVehicles(b: MapBuilder, count: number): void {
+  const [cw, cl] = SIZES.vehicle;
+  const keepOut = [
+    { x: 1560, y: 1560, w: 880, h: 880 }, // crossing + vault gates
+    zoneRect('GAS_STATION'),
+  ];
+  for (let i = 0; i < count; i++) {
+    const road = b.roadRects[i % b.roadRects.length]!;
+    const vertical = road.h > road.w;
+    const nearSide = b.rng.chance(0.5);
+    const lane: Rect = vertical
+      ? { x: nearSide ? road.x + 8 : road.x + road.w - 8 - cw, y: 120, w: cw, h: b.height - 240 }
+      : { x: 120, y: nearSide ? road.y + 8 : road.y + road.h - 8 - cw, w: b.width - 240, h: cw };
+    b.prop(lane, vertical ? cw : cl, vertical ? cl : cw, 'vehicle', { allowRoad: true, rotate: false, tint: b.rng.int(0, 2), avoid: keepOut });
+  }
+}
+
+function buildProps(b: MapBuilder): void {
+  const p = MAP_CONFIG.generation.props;
+  const vault = zoneRect('HIGH_VALUE');
+  const inner = (z: Rect, m = 60): Rect => ({ x: z.x + m, y: z.y + m, w: z.w - 2 * m, h: z.h - 2 * m });
+  hallShelves(b, p.factory.shelvesPerHall);
+  scatterProps(b, inner(zoneRect('CITY')), p.city);
+  scatterProps(b, inner(zoneRect('FACTORY')), { pallet: p.factory.pallet, barrel: p.factory.barrel, generator: p.factory.generator });
+  edgeFences(b, zoneRect('FACTORY'), p.factory.fence);
+  scatterProps(b, inner(zoneRect('PORT')), { pallet: p.port.pallet, barrel: p.port.barrel, vehicle: p.port.vehicle });
+  edgeFences(b, zoneRect('PORT'), p.port.fence);
+  scatterProps(b, inner(zoneRect('FOREST')), p.forest);
+  // Open ground between the quadrants (not inside other zones).
+  scatterProps(b, { x: 120, y: 120, w: b.width - 240, h: b.height - 240 }, p.open, [...MAP_CONFIG.zones.filter((z) => z.type !== 'HIGH_VALUE'), vault]);
+  roadVehicles(b, p.roadVehicles);
+}
+
 function buildBorder(b: MapBuilder): void {
   const t = MAP_CONFIG.border;
   b.rect(0, 0, b.width, t, 'wall');
@@ -403,6 +544,7 @@ export function generateMap(seed: number = MAP_CONFIG.seed): MapData {
   const vaultSpots = buildVault(b);
   buildForest(b);
   buildOpenField(b);
+  buildProps(b);
 
   const world = new CollisionWorld(b.obstacles, b.width, b.height);
   placeCrates(b, world, vaultSpots);

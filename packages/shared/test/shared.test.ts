@@ -41,6 +41,48 @@ describe('generateMap', () => {
     expect(map.spawnPoints.length).toBeGreaterThanOrEqual(100);
   });
 
+  it('stays fully navigable with cover props: every spawn, extraction and crate is reachable', () => {
+    const world = new CollisionWorld(map.obstacles, map.width, map.height);
+    const cell = 20;
+    const cols = Math.ceil(map.width / cell);
+    const rows = Math.ceil(map.height / cell);
+    const walkable = (i: number, j: number) =>
+      i >= 0 && j >= 0 && i < cols && j < rows && !world.circleIntersects(i * cell + cell / 2, j * cell + cell / 2, PLAYER_CONFIG.radius - 2);
+    const seen = new Uint8Array(cols * rows);
+    const start = map.spawnPoints[0]!;
+    const queue = [Math.floor(start.x / cell) + Math.floor(start.y / cell) * cols];
+    seen[queue[0]!] = 1;
+    for (let q = 0; q < queue.length; q++) {
+      const k = queue[q]!;
+      const i = k % cols;
+      const j = (k - i) / cols;
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const ni = i + di;
+        const nj = j + dj;
+        const nk = ni + nj * cols;
+        if (!seen[nk] && walkable(ni, nj)) {
+          seen[nk] = 1;
+          queue.push(nk);
+        }
+      }
+    }
+    /** Some reached cell within `r` units of the point. */
+    const reachable = (x: number, y: number, r: number) => {
+      for (let j = Math.floor((y - r) / cell); j <= Math.floor((y + r) / cell); j++) {
+        for (let i = Math.floor((x - r) / cell); i <= Math.floor((x + r) / cell); i++) {
+          if (i >= 0 && j >= 0 && i < cols && j < rows && seen[i + j * cols]) return true;
+        }
+      }
+      return false;
+    };
+    const props = map.obstacles.filter((o) => ['barrier', 'barrel', 'pallet', 'shelf', 'generator', 'vehicle', 'sandbag', 'fence'].includes(o.style));
+    expect(props.length).toBeGreaterThan(80);
+    for (const s of map.spawnPoints) expect(reachable(s.x, s.y, cell)).toBe(true);
+    for (const e of map.extractionPoints) expect(reachable(e.x, e.y, cell)).toBe(true);
+    // Crates must be reachable within interact range.
+    for (const c of map.crates) expect(reachable(c.x, c.y, PLAYER_CONFIG.interactRange - 20)).toBe(true);
+  });
+
   it('keeps spawn points and extraction centers free of obstacles', () => {
     const world = new CollisionWorld(map.obstacles, map.width, map.height);
     for (const s of map.spawnPoints) expect(world.circleIntersects(s.x, s.y, PLAYER_CONFIG.radius)).toBe(false);

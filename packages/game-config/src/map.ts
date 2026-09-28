@@ -37,6 +37,19 @@ export const MAP_CONFIG = {
     port: { containerRows: 6, containersPerRow: 7, containerSize: [150, 56] as const },
     vault: { wallThickness: 22, gateWidth: 110 },
     openField: { trees: 45, rocks: 30 },
+    /**
+     * Cover / set dressing props (collidable, so identical on server and
+     * client). Placed after the main layout with a walkable gap to anything else.
+     */
+    props: {
+      gap: 62,
+      city: { barrier: 10, barrel: 7, vehicle: 6, sandbag: 3 },
+      factory: { pallet: 12, barrel: 8, generator: 5, shelvesPerHall: 4, fence: 4 },
+      port: { pallet: 10, barrel: 8, vehicle: 3, fence: 3 },
+      forest: { sandbag: 4, barrel: 2 },
+      open: { sandbag: 8, barrier: 8, vehicle: 3 },
+      roadVehicles: 9,
+    },
   },
   crates: {
     CITY: { NORMAL: 26, MILITARY: 3, RARE: 5 },

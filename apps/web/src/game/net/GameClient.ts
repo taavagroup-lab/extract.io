@@ -19,6 +19,7 @@ import {
   type MapData,
   type MatchEndSummary,
   type MatchGlobalState,
+  type ObstacleStyle,
   type PlayerNet,
   type SelfState,
   type ServerMessage,
@@ -71,6 +72,8 @@ export interface ClientBullet {
   local: boolean;
   /** Server copy of one of our own shots: not drawn, only used for hit confirmation. */
   ghost: boolean;
+  /** Obstacle style the shot would stop at (impact VFX), null when it flies to max range. */
+  surface: ObstacleStyle | null;
 }
 
 export interface InputSample {
@@ -562,6 +565,7 @@ export class GameClient {
         hitPlayer,
         local: true,
         ghost: false,
+        surface: hitPlayer ? null : (wall?.obstacle.style ?? null),
       });
     }
     this.fx.push({ e: 'localShot', weaponId: def.id });
@@ -846,7 +850,7 @@ export class GameClient {
     // Our own shots are already shown via prediction; keep the server copy invisible
     // so hit confirmations (bullet end events) still line up.
     const ghost = ownerId === this.playerId;
-    this.bullets.push({ id, x0: x, y0: y, dx, dy, speed, maxDist, weapon, ownerId, born: performance.now(), endDist: null, hitPlayer: false, local: false, ghost });
+    this.bullets.push({ id, x0: x, y0: y, dx, dy, speed, maxDist, weapon, ownerId, born: performance.now(), endDist: null, hitPlayer: false, local: false, ghost, surface: hit?.obstacle.style ?? null });
     if (this.bullets.length > 500) this.bullets.splice(0, this.bullets.length - 500);
   }
 
