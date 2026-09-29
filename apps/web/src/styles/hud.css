@@ -221,6 +221,8 @@
   .hud-top-center { top: 170px; width: 90vw; }
   .minimap canvas { width: 120px; height: 120px; }
   .hud-top-right { width: 44vw; }
+  .hud-legendary { top: 236px; }
+  .hud-toasts { top: 46%; }
 }
 @media (max-height: 700px) {
   .hud-extract, .hud-interrupt { top: 54%; }

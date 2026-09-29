@@ -1123,8 +1123,9 @@ export class GameClient {
         this.notices = [...this.notices.slice(-3), { id: this.uid++, at: now, text: `${ev.name} bounty raised` }];
         break;
       case 'loot':
-        this.toasts = [...this.toasts.slice(-2), { id: this.uid++, at: now, itemId: ev.itemId, qty: ev.qty, rarity: ev.rarity, value: ev.value }];
+        // LEGENDARY+ get the centred moment instead of a side toast (no duplicate popups).
         if (RARITY_CONFIG[ev.rarity].rank >= RARITY_CONFIG.LEGENDARY.rank) this.legendary = { id: this.uid++, at: now, itemId: ev.itemId, value: ev.value };
+        else this.toasts = [...this.toasts.slice(-2), { id: this.uid++, at: now, itemId: ev.itemId, qty: ev.qty, rarity: ev.rarity, value: ev.value }];
         this.fx.push(ev);
         break;
       case 'notice':

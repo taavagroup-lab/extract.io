@@ -145,6 +145,7 @@ export class GroundItemModel {
   private spawnT: number;
   private spawnAt = -1;
   private readonly baseScale: number;
+  private collectT = 0;
   readonly rank: number;
   readonly color: number;
 
@@ -215,6 +216,24 @@ export class GroundItemModel {
       this.halo.rotation.z = t * 0.8;
       this.halo.scale.setScalar(24 + Math.sin(t * 2.4) * 3);
     }
+  }
+
+  /**
+   * Picked up: the item zips into the collector and shrinks away.
+   * Returns false once the animation is over (caller disposes).
+   */
+  collect(dt: number, x: number, z: number): boolean {
+    this.collectT += dt / 0.2;
+    const k = Math.min(1, this.collectT);
+    const e = k * k;
+    this.root.position.x += (x - this.root.position.x) * e;
+    this.root.position.z += (z - this.root.position.z) * e;
+    this.model.position.y += (30 - this.model.position.y) * e;
+    this.model.scale.setScalar(this.baseScale * (1 - k * 0.85));
+    this.glowDisc.visible = false;
+    if (this.beam) this.beam.visible = false;
+    if (this.halo) this.halo.visible = false;
+    return k < 1;
   }
 
   dispose(): void {

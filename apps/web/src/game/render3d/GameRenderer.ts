@@ -84,6 +84,8 @@ export class GameRenderer {
   private readonly lastHp = new Map<number, number>();
   private readonly lastArmor = new Map<number, number>();
   private readonly items = new Map<number, GroundItemModel>();
+  /** Items we just picked up, flying into the player. */
+  private readonly collecting: GroundItemModel[] = [];
   private itemsSynced = false;
   private readonly crates = new Map<number, CrateModel>();
   private readonly seenIds = new Set<number>();
@@ -115,6 +117,7 @@ export class GameRenderer {
 
   // Timing / quality
   private lastFrame = performance.now();
+  private lastDt = 0.016;
   private width = 1;
   private height = 1;
   private level: QualityLevel = 'high';
@@ -380,6 +383,7 @@ export class GameRenderer {
     const frameMs = Math.min(250, now - this.lastFrame);
     this.lastFrame = now;
     const dt = frameMs / 1000;
+    this.lastDt = dt;
     const c = this.client;
 
     if (!this.map && c.map) {
@@ -546,10 +550,21 @@ export class GameRenderer {
 
   private syncItems(time: number): void {
     const c = this.client;
+    const alive = c.self?.status === 'ALIVE' || c.self?.status === 'EXTRACTING';
     for (const [id, m] of this.items) {
       if (!c.items.has(id)) {
-        m.dispose();
         this.items.delete(id);
+        // Gone right next to us: we picked it up (fly in), otherwise it just vanishes.
+        const near = alive && Math.hypot(m.root.position.x - c.renderX, m.root.position.z - c.renderY) < 130;
+        if (near) this.collecting.push(m);
+        else m.dispose();
+      }
+    }
+    for (let i = this.collecting.length - 1; i >= 0; i--) {
+      const m = this.collecting[i]!;
+      if (!m.collect(this.lastDt, c.renderX, c.renderY)) {
+        m.dispose();
+        this.collecting.splice(i, 1);
       }
     }
     const motes = time >= this.nextMoteAt;
