@@ -20,12 +20,14 @@ const GradeShader = {
     uAspect: { value: 1.7 },
     uHurt: { value: 0 },
     uExtract: { value: 0 },
+    uFlash: { value: 0 },
+    uFlashColor: { value: new THREE.Vector3(1, 0.8, 0.3) },
   },
   vertexShader: /* glsl */ `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
-    uniform float uSat, uVib, uContrast, uVignette, uAspect, uHurt, uExtract;
-    uniform vec3 uShadowTint, uHighTint;
+    uniform float uSat, uVib, uContrast, uVignette, uAspect, uHurt, uExtract, uFlash;
+    uniform vec3 uShadowTint, uHighTint, uFlashColor;
     varying vec2 vUv;
     void main() {
       vec4 c = texture2D(tDiffuse, vUv);
@@ -49,6 +51,8 @@ const GradeShader = {
       c.rgb *= 1.0 - uHurt * 0.3 * smoothstep(0.35, 1.1, r);
       // extracting: faint green lift towards the edges
       c.rgb += vec3(0.02, 0.07, 0.035) * uExtract * smoothstep(0.3, 1.0, r);
+      // legendary find: brief warm lift, strongest in the centre
+      c.rgb += uFlashColor * uFlash * 0.22 * (1.0 - 0.6 * smoothstep(0.0, 1.0, r));
       gl_FragColor = c;
     }`,
 };
@@ -68,5 +72,13 @@ export class GradePass extends ShaderPass {
     const k = Math.min(1, dt * 4);
     u.uHurt!.value += (hurt - (u.uHurt!.value as number)) * k;
     u.uExtract!.value += (extract - (u.uExtract!.value as number)) * k;
+    u.uFlash!.value = Math.max(0, (u.uFlash!.value as number) - dt * 1.6);
+  }
+
+  /** Short full-screen colour flash (legendary finds). */
+  flash(color: number, amount: number): void {
+    const c = new THREE.Color(color);
+    (this.uniforms.uFlashColor!.value as THREE.Vector3).set(c.r, c.g, c.b);
+    this.uniforms.uFlash!.value = Math.max(this.uniforms.uFlash!.value as number, amount);
   }
 }

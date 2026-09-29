@@ -1,6 +1,7 @@
 import { RARITY_CONFIG, getItemDef, isWeaponId } from '@extract/game-config';
 import type { ItemId } from '@extract/game-types';
 import * as THREE from 'three';
+import { mergeStatic } from '../geometry';
 import { glow, mat } from '../materials';
 import { Textures } from '../textures';
 import { weaponModel } from './weapons';
@@ -36,10 +37,14 @@ function buildModel(itemId: ItemId): THREE.Group {
   const rarityGlow = glow(RARITY_CONFIG[def.rarity].colorHex, 1, null, 2.4);
 
   if (def.metadata.weaponId && isWeaponId(def.metadata.weaponId)) {
+    // Weapons lie on their side: the side profile (grip, mag, stock, scope)
+    // is the most recognisable silhouette from the top-down camera.
     const w = weaponModel(def.metadata.weaponId);
     w.group.position.x = -w.muzzle / 2;
+    w.group.rotation.x = -Math.PI / 2;
     g.add(w.group);
-    g.scale.setScalar(1.15);
+    g.scale.setScalar(0.95);
+    g.userData.weapon = true;
     return g;
   }
   switch (itemId) {
@@ -117,6 +122,7 @@ function buildModel(itemId: ItemId): THREE.Group {
     default:
       g.add(p(cube, rarityGlow, [12, 12, 12], [0, 0, 0]));
   }
+  mergeStatic(g);
   return g;
 }
 
@@ -133,16 +139,26 @@ export class GroundItemModel {
   private readonly beam: THREE.Mesh | null = null;
   private readonly halo: THREE.Mesh | null = null;
   private readonly phase = Math.random() * Math.PI * 2;
+  private readonly weapon: boolean;
+  private readonly yaw = Math.random() * Math.PI * 2;
+  /** Drop pop animation progress (1 = settled). */
+  private spawnT: number;
+  private spawnAt = -1;
+  private readonly baseScale: number;
   readonly rank: number;
   readonly color: number;
 
-  constructor(itemId: ItemId, x: number, y: number) {
+  /** `animate`: the item was just dropped / spilled and pops out of the ground. */
+  constructor(itemId: ItemId, x: number, y: number, animate = false) {
     let t = templates.get(itemId);
     if (!t) {
       t = buildModel(itemId);
       templates.set(itemId, t);
     }
     this.model = t.clone();
+    this.weapon = t.userData.weapon === true;
+    this.baseScale = this.model.scale.x;
+    this.spawnT = animate ? 0 : 1;
     const def = getItemDef(itemId);
     const color = RARITY_CONFIG[def.rarity].colorHex;
     this.color = color;
@@ -174,10 +190,27 @@ export class GroundItemModel {
 
   update(time: number): void {
     const t = time / 1000 + this.phase;
-    this.model.position.y = 14 + Math.sin(t * 2.2) * 3;
-    this.model.rotation.y = t * 0.9;
+    // Pop: arc up out of the spill point, land with a small bounce.
+    let lift = 0;
+    let scale = 1;
+    if (this.spawnT < 1) {
+      if (this.spawnAt < 0) this.spawnAt = time;
+      this.spawnT = Math.min(1, (time - this.spawnAt) / 480);
+      const k = this.spawnT;
+      lift = Math.sin(Math.min(1, k / 0.7) * Math.PI) * 26 + (k > 0.7 ? Math.sin(((k - 0.7) / 0.3) * Math.PI) * 4 : 0);
+      scale = 0.35 + 0.65 * Math.min(1, k * 1.8);
+    }
+    if (this.weapon) {
+      // Lying weapon: gentle hover and a slow sway instead of a spin.
+      this.model.position.y = 7 + Math.sin(t * 1.8) * 1.5 + lift;
+      this.model.rotation.y = this.yaw + Math.sin(t * 0.6) * 0.3;
+    } else {
+      this.model.position.y = 14 + Math.sin(t * 2.2) * 3 + lift;
+      this.model.rotation.y = t * 0.9;
+    }
+    this.model.scale.setScalar(this.baseScale * scale);
     const pulse = 0.85 + 0.15 * Math.sin(t * 3);
-    this.glowDisc.scale.setScalar((46 + this.rank * 10) * pulse);
+    this.glowDisc.scale.setScalar((46 + this.rank * 10) * pulse * (0.4 + 0.6 * this.spawnT));
     if (this.halo) {
       this.halo.rotation.z = t * 0.8;
       this.halo.scale.setScalar(24 + Math.sin(t * 2.4) * 3);

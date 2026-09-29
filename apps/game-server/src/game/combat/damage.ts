@@ -20,10 +20,18 @@ export interface DamageResult {
 
 /**
  * Armor absorbs `absorbRatio` of incoming damage until it is depleted.
+ * `armorMultiplier` is how many armor points each absorbed point costs
+ * (armor-piercing weapons strip armor faster).
  * Example: 20 dmg vs 25 armor @ 0.5 -> 10 armor, 10 health.
  */
-export function computeDamage(amount: number, armor: number, absorbRatio: number = PLAYER_CONFIG.armorAbsorbRatio): DamageResult {
+export function computeDamage(
+  amount: number,
+  armor: number,
+  absorbRatio: number = PLAYER_CONFIG.armorAbsorbRatio,
+  armorMultiplier = 1,
+): DamageResult {
   const dmg = Math.max(0, amount);
-  const armorDamage = Math.min(Math.max(0, armor), dmg * absorbRatio);
-  return { healthDamage: dmg - armorDamage, armorDamage };
+  const mul = Math.max(0.01, armorMultiplier);
+  const absorbed = Math.min(Math.max(0, armor) / mul, dmg * absorbRatio);
+  return { healthDamage: dmg - absorbed, armorDamage: Math.min(Math.max(0, armor), absorbed * mul) };
 }

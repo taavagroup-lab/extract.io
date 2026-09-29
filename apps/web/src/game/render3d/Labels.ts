@@ -14,10 +14,14 @@ interface DamageLabel {
   z: number;
   born: number;
   active: boolean;
+  target: number;
+  total: number;
 }
 
 const DAMAGE_POOL = 28;
 const DAMAGE_MS = 750;
+/** Hits on the same target within this window merge into one number. */
+const MERGE_MS = 450;
 
 /**
  * Screen-space DOM labels anchored to world positions (crisp text, CSS
@@ -42,7 +46,7 @@ export class Labels {
       el.className = 'lbl-dmg';
       el.style.display = 'none';
       this.el.appendChild(el);
-      this.damage.push({ el, x: 0, z: 0, born: 0, active: false });
+      this.damage.push({ el, x: 0, z: 0, born: 0, active: false, target: -1, total: 0 });
     }
   }
 
@@ -101,15 +105,29 @@ export class Labels {
     }
   }
 
-  showDamage(x: number, z: number, amount: number, armor: boolean): void {
-    const d = this.damage[this.cursor++ % DAMAGE_POOL]!;
-    d.x = x + (Math.random() - 0.5) * 24;
+  /**
+   * Damage number over a target. Rapid hits on the same target add up into
+   * one number (no number spam from SMGs / shotgun pellets).
+   */
+  showDamage(target: number, x: number, z: number, amount: number, armor: boolean): void {
+    const now = performance.now();
+    let d = this.damage.find((l) => l.active && l.target === target && now - l.born < MERGE_MS);
+    if (d) d.total += amount;
+    else {
+      d = this.damage[this.cursor++ % DAMAGE_POOL]!;
+      d.total = amount;
+      d.target = target;
+      d.x = x + (Math.random() - 0.5) * 16;
+    }
     d.z = z;
-    d.born = performance.now();
+    d.born = now;
     d.active = true;
-    d.el.textContent = String(amount);
+    d.el.textContent = String(d.total);
     d.el.classList.toggle('is-armor', armor);
-    d.el.classList.toggle('is-big', amount >= 40);
+    d.el.classList.toggle('is-big', d.total >= 40);
+    d.el.classList.remove('is-pop');
+    void d.el.offsetWidth;
+    d.el.classList.add('is-pop');
   }
 
   updateZone(camera: THREE.Camera, id: string, text: string | null, x: number, z: number, radius: number, cls: string): void {

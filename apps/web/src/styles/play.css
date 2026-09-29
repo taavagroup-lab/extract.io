@@ -55,27 +55,47 @@
 .game { position: absolute; inset: 0; overflow: hidden; }
 .game-canvas { position: absolute; inset: 0; cursor: none; overflow: hidden; }
 
-/* Crosshair (follows the mouse; gap widens with weapon spread and recoil) */
-.crosshair { --gap: 8px; position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 6; opacity: 0; will-change: transform; }
+/* Crosshair: follows the mouse; the gap is the real spread cone at the cursor's
+   distance. Hit / armour / kill markers, reload ring, low-ammo tint. */
+.crosshair { --gap: 8px; --punch: 1; --ch: #f8fafc; position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 6; opacity: 0; will-change: transform; }
 .crosshair.is-on { opacity: 1; }
 .crosshair.is-hidden { opacity: 0; }
-.crosshair i { position: absolute; background: #f8fafc; box-shadow: 0 0 0 1px #000a, 0 0 6px #000; border-radius: 1px; transition: transform 60ms linear; }
-.crosshair .ch-t, .crosshair .ch-b { width: 2px; height: 9px; left: -1px; }
-.crosshair .ch-l, .crosshair .ch-r { width: 9px; height: 2px; top: -1px; }
-.crosshair .ch-t { top: calc(-9px - var(--gap)); }
+.crosshair.is-low { --ch: #fbbf24; }
+.crosshair .ch-spread { position: absolute; left: 0; top: 0; transform: scale(var(--punch)); }
+.crosshair i { position: absolute; background: var(--ch); box-shadow: 0 0 0 1px #000a, 0 0 6px #000; border-radius: 1px; }
+.crosshair .ch-t, .crosshair .ch-b { width: 2px; height: 8px; left: -1px; }
+.crosshair .ch-l, .crosshair .ch-r { width: 8px; height: 2px; top: -1px; }
+.crosshair .ch-t { top: calc(-8px - var(--gap)); }
 .crosshair .ch-b { top: var(--gap); }
-.crosshair .ch-l { left: calc(-9px - var(--gap)); }
+.crosshair .ch-l { left: calc(-8px - var(--gap)); }
 .crosshair .ch-r { left: var(--gap); }
+/* Shotguns: the pellet pattern reads better as a circle. */
+.crosshair .ch-circle { display: none; position: absolute; left: calc(-1 * var(--gap)); top: calc(-1 * var(--gap)); width: calc(2 * var(--gap)); height: calc(2 * var(--gap)); border: 1.5px solid color-mix(in srgb, var(--ch) 55%, transparent); border-radius: 50%; box-shadow: 0 0 0 1px #0006; }
+.crosshair.is-pellets .ch-circle { display: block; }
+.crosshair.is-pellets .ch-t, .crosshair.is-pellets .ch-b { height: 5px; }
+.crosshair.is-pellets .ch-l, .crosshair.is-pellets .ch-r { width: 5px; }
 .crosshair .ch-dot { position: absolute; width: 3px; height: 3px; left: -1.5px; top: -1.5px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 4px var(--accent); }
+.crosshair.is-low .ch-dot { background: #fbbf24; box-shadow: 0 0 5px #fbbf24; }
+.crosshair .ch-ring { position: absolute; left: -20px; top: -20px; width: 40px; height: 40px; transform: rotate(-90deg); opacity: 0; transition: opacity 120ms; }
+.crosshair .ch-ring circle { fill: none; stroke: #fbbf24; stroke-width: 2.5; stroke-linecap: round; filter: drop-shadow(0 0 2px #000); }
+.crosshair.is-reload .ch-ring { opacity: 1; }
+.crosshair.is-reload .ch-spread { opacity: 0.35; }
+.crosshair .ch-note { position: absolute; left: 0; top: 26px; transform: translateX(-50%); font-family: var(--font-display); font-size: 10px; letter-spacing: 0.24em; color: #fca5a5; text-shadow: 0 1px 2px #000; white-space: nowrap; }
+.crosshair .ch-note.is-flash { animation: ch-note 360ms ease-out; }
+@keyframes ch-note { 0% { transform: translateX(-50%) scale(1.3); color: #fff; } 100% { transform: translateX(-50%) scale(1); } }
 .crosshair .ch-hit { position: absolute; left: -11px; top: -11px; width: 22px; height: 22px; opacity: 0; }
-.crosshair .ch-hit::before, .crosshair .ch-hit::after { content: ''; position: absolute; left: 10px; top: -3px; width: 2px; height: 28px; background: #fff; box-shadow: 0 0 4px #000; }
+.crosshair .ch-hit::before, .crosshair .ch-hit::after { content: ''; position: absolute; left: 10px; top: 1px; width: 2px; height: 20px; background: #fff; box-shadow: 0 0 3px #000; clip-path: polygon(0 0, 100% 0, 100% 30%, 0 30%, 0 70%, 100% 70%, 100% 100%, 0 100%); }
 .crosshair .ch-hit::before { transform: rotate(45deg); }
 .crosshair .ch-hit::after { transform: rotate(-45deg); }
-.crosshair.is-hit .ch-hit { animation: ch-hit 180ms ease-out; }
-.crosshair.is-kill .ch-hit { animation: ch-kill 420ms ease-out; }
-.crosshair.is-kill .ch-hit::before, .crosshair.is-kill .ch-hit::after { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
-@keyframes ch-hit { 0% { opacity: 1; transform: scale(1.25); } 100% { opacity: 0; transform: scale(0.9); } }
-@keyframes ch-kill { 0% { opacity: 1; transform: scale(1.6) rotate(0deg); } 60% { opacity: 1; } 100% { opacity: 0; transform: scale(1) rotate(0deg); } }
+.crosshair.is-hit .ch-hit { animation: ch-hit 170ms ease-out; }
+.crosshair.is-armor .ch-hit { animation: ch-hit 190ms ease-out; }
+.crosshair.is-armor .ch-hit::before, .crosshair.is-armor .ch-hit::after { background: #7dd3fc; box-shadow: 0 0 5px #38bdf8; }
+.crosshair.is-kill .ch-hit { animation: ch-kill 460ms ease-out; }
+.crosshair.is-kill .ch-hit::before, .crosshair.is-kill .ch-hit::after { background: #ff4d5e; box-shadow: 0 0 8px #ff4d5e; height: 26px; top: -2px; clip-path: none; }
+@keyframes ch-hit { 0% { opacity: 1; transform: scale(1.3); } 100% { opacity: 0; transform: scale(0.95); } }
+@keyframes ch-kill { 0% { opacity: 1; transform: scale(1.7); } 55% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
+
+.weapon-debug { position: absolute; left: 14px; bottom: 44px; z-index: 7; margin: 0; padding: 8px 10px; font-family: var(--font-mono); font-size: 11px; line-height: 1.45; color: #d9f99d; background: #000000c7; border: 1px solid #a3e63555; border-radius: 6px; pointer-events: none; white-space: pre; }
 
 .fps-meter { position: absolute; left: 14px; bottom: 14px; z-index: 5; font-family: var(--font-mono); font-size: 11px; color: #a3e635; background: #000000a6; padding: 3px 7px; border-radius: 4px; pointer-events: none; }
 .game-canvas canvas { display: block; }
@@ -91,9 +111,11 @@
 .lbl-hp { position: absolute; left: 0; top: 0; height: 5px; background: linear-gradient(90deg, #22c55e, #86efac); transition: width 120ms; }
 .lbl-hp.is-low { background: linear-gradient(90deg, #dc2626, #f87171); }
 .lbl-armor { position: absolute; left: 0; bottom: 0; height: 2px; background: #38bdf8; }
-.lbl-dmg { font-family: var(--font-mono); font-weight: 700; font-size: 20px; color: #fde047; text-shadow: 0 2px 0 #000, 0 0 6px #000; }
+.lbl-dmg { font-family: var(--font-mono); font-weight: 700; font-size: 17px; color: #f8fafc; text-shadow: 0 2px 0 #000, 0 0 6px #000; }
+.lbl-dmg.is-pop { animation: dmg-pop 160ms ease-out; }
+@keyframes dmg-pop { from { font-size: 23px; } }
 .lbl-dmg.is-armor { color: #7dd3fc; }
-.lbl-dmg.is-big { font-size: 26px; color: #fb923c; }
+.lbl-dmg.is-big { font-size: 21px; color: #fbbf24; }
 .lbl-zone { font-size: 15px; font-weight: 700; letter-spacing: 0.16em; color: #6ee7b7; text-shadow: 0 0 10px #10b98199, 0 2px 3px #000; }
 .lbl-zone.is-busy { color: #fdba74; text-shadow: 0 0 10px #f9731699, 0 2px 3px #000; }
 .lbl-zone.is-supply { color: #fdba74; text-shadow: 0 0 10px #f9731699, 0 2px 3px #000; }
@@ -174,4 +196,8 @@
 .dev-row--wrap { flex-wrap: wrap; }
 .dev-row input, .dev-row select { padding: 6px 8px; font-size: 12px; width: 80px; flex: 1; }
 .dev-row select { width: auto; flex: 2; }
+.dev-weapons .x-btn { flex: 1 1 30%; padding-inline: 4px; font-size: 11px; }
+.dev-toggles { gap: 4px 10px; }
+.dev-panel label.dev-check { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 10px; letter-spacing: 0.08em; color: var(--text); cursor: pointer; }
+.dev-check input { width: auto; flex: none; accent-color: var(--accent); }
 .dev-foot { margin: 0; padding: 8px 12px; color: var(--dim); font-size: 11px; }

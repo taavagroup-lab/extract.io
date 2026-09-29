@@ -12,3 +12,4 @@ export * from './money';
 export * from './threat';
 export * from './progression';
 export * from './share';
+export * from './weapons';

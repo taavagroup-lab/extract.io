@@ -17,6 +17,44 @@ function normalize(g: THREE.BufferGeometry): THREE.BufferGeometry {
   return out;
 }
 
+const mergeCache = new Map<string, { material: THREE.Material; geometry: THREE.BufferGeometry; cast: boolean }[]>();
+
+/**
+ * Merges the direct child meshes of `group` into one mesh per material
+ * (draw calls: one per material instead of one per part). Meshes that
+ * `keep` accepts (animated parts) and non-mesh children stay as they are.
+ * With a `cacheKey` the merged geometries are shared by every group built
+ * the same way (e.g. all characters wearing the same skin).
+ */
+export function mergeStatic(group: THREE.Object3D, keep: (m: THREE.Mesh) => boolean = () => false, cacheKey?: string): void {
+  const meshes = group.children.filter((c): c is THREE.Mesh => c instanceof THREE.Mesh && !(c instanceof THREE.InstancedMesh) && !keep(c) && !Array.isArray(c.material));
+  if (meshes.length < 2) return;
+  let merged = cacheKey ? mergeCache.get(cacheKey) : undefined;
+  if (!merged) {
+    const byMat = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; cast: boolean }>();
+    for (const m of meshes) {
+      m.updateMatrix();
+      const g = normalize(m.geometry.clone().applyMatrix4(m.matrix));
+      const entry = byMat.get(m.material as THREE.Material) ?? { geos: [], cast: false };
+      entry.geos.push(g);
+      entry.cast ||= m.castShadow;
+      byMat.set(m.material as THREE.Material, entry);
+    }
+    merged = [...byMat.entries()].map(([material, e]) => {
+      const geometry = mergeGeometries(e.geos, false)!;
+      for (const g of e.geos) g.dispose();
+      return { material, geometry, cast: e.cast };
+    });
+    if (cacheKey) mergeCache.set(cacheKey, merged);
+  }
+  for (const m of meshes) m.removeFromParent();
+  for (const { material, geometry, cast } of merged) {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = cast;
+    group.add(mesh);
+  }
+}
+
 export interface FlushOptions {
   cast: boolean;
   receive: boolean;

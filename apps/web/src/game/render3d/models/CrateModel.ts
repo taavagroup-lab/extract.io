@@ -1,5 +1,6 @@
 import type { ContainerType } from '@extract/game-types';
 import * as THREE from 'three';
+import { mergeStatic } from '../geometry';
 import { decalMat, glow, mat } from '../materials';
 import { CRATE_STYLE } from '../style';
 import { Decals, Textures } from '../textures';
@@ -121,6 +122,12 @@ export class CrateModel {
       this.holo.position.y = h + 22;
       this.root.add(this.holo);
     }
+
+    // Static shell / trim: one draw call per material, shared by every crate of this type.
+    const beam = this.beam;
+    const holo = this.holo;
+    mergeStatic(this.root, (m) => m.renderOrder !== 0 || m === beam || m === holo, `crate:${type}`);
+    mergeStatic(this.lidPivot, undefined, `lid:${type}`);
 
     this.opened = opened;
     this.lidAngle = opened ? 1 : 0;

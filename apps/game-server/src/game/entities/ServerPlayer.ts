@@ -10,7 +10,7 @@ import {
   type SelfState,
   type ServerMessage,
 } from '@extract/game-types';
-import type { MoveState } from '@extract/shared';
+import { createWeaponRuntime, type MoveState, type WeaponRuntime } from '@extract/shared';
 import { RaidInventory } from '../inventory/RaidInventory';
 import type { ClientView } from '../../net/ClientView';
 
@@ -53,8 +53,12 @@ export class ServerPlayer {
   /** Bag currently at the KINGPIN threat tier (maintained by KingpinSystem). */
   kingpin = false;
 
-  nextFireAt = 0;
-  reload: { slot: number; endsAt: number; totalMs: number } | null = null;
+  /** Shared weapon controller state (fire cadence, bursts, bloom). */
+  readonly weapon: WeaponRuntime = createWeaponRuntime();
+  /** endsAt: next completion step (SHELL: next round), fullAt: reload fully done. */
+  reload: { slot: number; endsAt: number; fullAt: number; totalMs: number } | null = null;
+  /** DEV only: magazine never empties. */
+  devInfiniteAmmo = false;
   use: TimedUse | null = null;
   extraction: ExtractionAttempt | null = null;
   lastDamagedAt = -Infinity;
@@ -149,7 +153,7 @@ export class ServerPlayer {
       activeSlot: inv.activeSlot,
       weapons: inv.weapons.map((w) => (w ? { ...w } : null)),
       ammo: { ...inv.ammo },
-      reloadRemainingMs: this.reload ? Math.max(0, this.reload.endsAt - now) : 0,
+      reloadRemainingMs: this.reload ? Math.max(0, this.reload.fullAt - now) : 0,
       reloadTotalMs: this.reload?.totalMs ?? 0,
       useItem: this.use ? { itemId: this.use.itemId, remainingMs: Math.max(0, this.use.endsAt - now), totalMs: this.use.totalMs } : null,
       kills: this.kills,

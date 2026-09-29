@@ -4,11 +4,11 @@ import {
   ITEM_DEFINITIONS,
   MATCH_CONFIG,
   NETWORK_CONFIG,
+  PLAYER_CONFIG,
   WEAPONS,
   type KingpinRevealConfig,
 } from '@extract/game-config';
 import {
-  INPUT_BUTTONS,
   type BulletEnd,
   type BulletSpawn,
   type ClientAction,
@@ -35,6 +35,7 @@ import { SnapshotBuilder } from '../../net/SnapshotBuilder';
 import type { GamePersistence, RunOutcome } from '../../persistence/types';
 import { DEATH_LOSS_OPTIONS, TIMEOUT_LOSS_OPTIONS, computeRunLoss } from '../death/deathOutcome';
 import { ServerPlayer, type PlayerChannel } from '../entities/ServerPlayer';
+import { createWeapon } from '../inventory/RaidInventory';
 import { matchId, secretKey } from '../ids';
 import { LimitedSupplyTracker } from '../loot/lootGenerator';
 import { BountySystem } from '../systems/BountySystem';
@@ -318,8 +319,8 @@ export class MatchRoom {
       p.lastProcessedSeq = input.s;
       if (!canMove) continue;
       p.rotation = wrapAngle(input.a);
-      stepMovement(p.move, input, dt, this.world.collision);
-      if (input.b & INPUT_BUTTONS.FIRE) this.combat.tryFire(p);
+      stepMovement(p.move, input, dt, this.world.collision, this.combat.moveParams(p));
+      this.combat.stepFire(p, input, dt * 1000);
     }
     // No banking while idle: otherwise a client could stay silent and then
     // burst-move. One tick of slack still absorbs normal network jitter.
@@ -788,6 +789,18 @@ export class MatchRoom {
         this.loot.give(p, def.id, 1);
         return note(`gave ${def.name}`);
       }
+      case 'giveWeapon': {
+        if (!p.inWorld) return;
+        const def = WEAPONS[cmd.weaponId];
+        const { replaced } = p.inventory.equipWeapon(createWeapon(def.itemId));
+        if (replaced) this.world.spawnItem({ itemId: replaced.itemId, qty: 1, mag: replaced.mag }, p.x, p.y, this.now);
+        p.inventory.addAmmo(def.ammoType, PLAYER_CONFIG.maxAmmo[def.ammoType]);
+        p.reload = null;
+        return note(`equipped ${def.name}`);
+      }
+      case 'infiniteAmmo':
+        p.devInfiniteAmmo = cmd.on;
+        return note(`infinite ammo ${cmd.on ? 'on' : 'off'}`);
       case 'heal':
         p.hp = p.maxHp;
         p.armor = 100;

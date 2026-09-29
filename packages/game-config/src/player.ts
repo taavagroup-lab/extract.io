@@ -22,8 +22,8 @@ export const PLAYER_CONFIG = {
   interactRange: 95,
   /** Ammo items are picked up automatically within this range. */
   autoPickupRange: 40,
-  startAmmo: { light: 48, rifle: 0, shell: 0 } satisfies AmmoReserves,
-  maxAmmo: { light: 240, rifle: 200, shell: 60 } satisfies AmmoReserves,
+  startAmmo: { light: 48, rifle: 0, shell: 0, heavy: 0 } satisfies AmmoReserves,
+  maxAmmo: { light: 240, rifle: 240, shell: 60, heavy: 60 } satisfies AmmoReserves,
   /** Visual label clearance for names, used by the client. */
   nameOffset: 38,
 } as const;

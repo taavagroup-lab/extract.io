@@ -33,6 +33,7 @@ export class InputController {
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('mouseup', this.onMouseUp);
     window.addEventListener('blur', this.onBlur);
+    window.addEventListener('wheel', this.onWheel, { passive: true });
   }
 
   dispose(): void {
@@ -40,7 +41,33 @@ export class InputController {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('blur', this.onBlur);
+    window.removeEventListener('wheel', this.onWheel);
   }
+
+  /** Next / previous weapon that exists (mouse wheel, Q). */
+  private cycleWeapon(dir: 1 | -1): void {
+    const weapons = this.client.self?.weapons;
+    if (!weapons || this.blocked) return;
+    const n = weapons.length;
+    for (let i = 1; i < n; i++) {
+      const slot = (((this.client.activeSlot + dir * i) % n) + n) % n;
+      if (weapons[slot]) {
+        this.client.switchWeapon(slot);
+        return;
+      }
+    }
+  }
+
+  private lastWheelAt = 0;
+  private readonly onWheel = (e: WheelEvent): void => {
+    if (isTyping(e.target) || Math.abs(e.deltaY) < 4) return;
+    // Only over the game canvas (menus / inventory scroll normally).
+    if (!(e.target instanceof HTMLCanvasElement)) return;
+    const now = performance.now();
+    if (now - this.lastWheelAt < 140) return;
+    this.lastWheelAt = now;
+    this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
+  };
 
   sample(aim: number): InputSample {
     if (this.blocked) return { mx: 0, my: 0, aim, fire: false };
@@ -84,7 +111,7 @@ export class InputController {
         this.client.queueDash();
         break;
       case 'KeyR':
-        this.client.action({ k: 'reload' });
+        this.client.reload();
         break;
       case 'KeyE':
       case 'KeyF':
@@ -93,7 +120,10 @@ export class InputController {
       case 'Digit1':
       case 'Digit2':
       case 'Digit3':
-        this.client.action({ k: 'switch', slot: Number(e.code.slice(5)) - 1 });
+        this.client.switchWeapon(Number(e.code.slice(5)) - 1);
+        break;
+      case 'KeyQ':
+        this.cycleWeapon(1);
         break;
       case 'KeyH':
         this.client.action({ k: 'useItem', itemId: 'medkit' });

@@ -641,6 +641,47 @@ export const Textures = {
         ctx.fill();
       }
     }),
+  /**
+   * Muzzle flame petal: base at u=0 (the muzzle), tip at u=1. Hot white
+   * core near the base, ragged tapering tongue; tinted by the material.
+   */
+  flame: () =>
+    decal('flame', 128, 64, 28, (ctx, w, rand) => {
+      const h = 64;
+      const cy = h / 2;
+      const layers: [number, string][] = [
+        [1, 'rgba(255,255,255,0.35)'],
+        [0.72, 'rgba(255,255,255,0.6)'],
+        [0.42, 'rgba(255,255,255,1)'],
+      ];
+      for (const [len, color] of layers) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(0, cy - h * 0.2 * len);
+        const n = 7;
+        for (let i = 1; i <= n; i++) {
+          const t = i / n;
+          const half = h * 0.42 * len * Math.pow(1 - t, 0.8) * (0.75 + rand() * 0.5);
+          ctx.lineTo(w * len * t, cy - half);
+        }
+        for (let i = n; i >= 1; i--) {
+          const t = i / n;
+          const half = h * 0.42 * len * Math.pow(1 - t, 0.8) * (0.75 + rand() * 0.5);
+          ctx.lineTo(w * len * t, cy + half);
+        }
+        ctx.lineTo(0, cy + h * 0.2 * len);
+        ctx.closePath();
+        ctx.fill();
+      }
+      // Soften: radial falloff from the base.
+      const g = ctx.createRadialGradient(0, cy, 0, 0, cy, w);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(0.7, 'rgba(0,0,0,0.25)');
+      g.addColorStop(1, 'rgba(0,0,0,1)');
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+    }),
 };
 
 // ------------------------------------------------------------------ decals

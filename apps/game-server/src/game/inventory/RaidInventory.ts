@@ -40,7 +40,7 @@ export class RaidInventory {
   constructor(bagSlots: number = PLAYER_CONFIG.bagSlots, weaponSlots: number = PLAYER_CONFIG.weaponSlots) {
     this.slots = Array.from({ length: bagSlots }, () => null);
     this.weapons = Array.from({ length: weaponSlots }, () => null);
-    this.ammo = { light: 0, rifle: 0, shell: 0 };
+    this.ammo = { light: 0, rifle: 0, shell: 0, heavy: 0 };
   }
 
   static starter(): RaidInventory {

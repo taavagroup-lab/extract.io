@@ -62,6 +62,7 @@ export const LOOT_TABLES: Record<ContainerType, LootTableDefinition> = {
       { itemId: 'ammo_light', qty: [20, 40], chance: 0.6 },
       { itemId: 'ammo_rifle', qty: [15, 30], chance: 0.4 },
       { itemId: 'ammo_shell', qty: [6, 12], chance: 0.3 },
+      { itemId: 'ammo_heavy', qty: [6, 12], chance: 0.3 },
     ],
   },
   RARE: {
@@ -91,6 +92,7 @@ export const LOOT_TABLES: Record<ContainerType, LootTableDefinition> = {
       { itemId: 'armor_plate', qty: [2, 3], chance: 1 },
       { itemId: 'medkit', qty: [1, 2], chance: 1 },
       { itemId: 'ammo_rifle', qty: [30, 50], chance: 1 },
+      { itemId: 'ammo_heavy', qty: [10, 20], chance: 0.6 },
     ],
   },
 };

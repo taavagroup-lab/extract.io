@@ -4,6 +4,7 @@ import type { ContainerType } from './loot';
 import type { MapData } from './map';
 import type { LobbyState, MatchGlobalState, MatchPhase } from './match';
 import type { DeathSummary, ExtractionSummary, InventoryState, SelfState } from './player';
+import type { WeaponId } from './weapons';
 
 // ---------------------------------------------------------------------------
 // Client -> Server
@@ -47,6 +48,9 @@ export type DevCommand =
   | { cmd: 'activateExtraction' }
   | { cmd: 'setMatchTime'; ms: number }
   | { cmd: 'giveLegendary' }
+  /** Equip a weapon directly (fills its ammo type). */
+  | { cmd: 'giveWeapon'; weaponId: WeaponId }
+  | { cmd: 'infiniteAmmo'; on: boolean }
   | { cmd: 'heal' }
   | { cmd: 'endMatch' };
 
@@ -92,6 +96,8 @@ export interface GroundItemView {
   y: number;
   itemId: ItemId;
   qty: number;
+  /** Rounds loaded in a dropped weapon. */
+  mag?: number;
 }
 
 export interface CrateView {
@@ -109,7 +115,10 @@ export type CrateUpdate = [number, number, number];
 /** [id, x, y, angle*1000, speed, range, weaponIndex, ownerId] */
 export type BulletSpawn = [number, number, number, number, number, number, number, number];
 
-/** [id, x, y, hitPlayer 0/1] */
+/**
+ * [id, x, y, hit] hit: 0 = world / max range, 1 = player (bullet ends),
+ * 2 = player pierced (bullet continues).
+ */
 export type BulletEnd = [number, number, number, number];
 
 export type AnnouncementKind = 'info' | 'warning' | 'danger' | 'success';
@@ -127,8 +136,8 @@ export type GameEvent =
   | { e: 'phase'; phase: MatchPhase }
   | { e: 'announce'; text: string; sub?: string; kind: AnnouncementKind }
   | { e: 'loot'; itemId: ItemId; qty: number; rarity: Rarity; value: Cents }
-  | { e: 'dmg'; targetId: EntityId; amount: number; x: number; y: number; armor: boolean }
-  | { e: 'hurt'; amount: number; angle: number }
+  | { e: 'dmg'; targetId: EntityId; amount: number; x: number; y: number; armor: boolean; killed?: boolean }
+  | { e: 'hurt'; amount: number; angle: number; armor?: boolean }
   | { e: 'extractAlert'; zoneId: string; x: number; y: number }
   | { e: 'extract'; state: 'started' | 'cancelled'; zoneId: string; reason?: string }
   | { e: 'notice'; text: string }

@@ -1,6 +1,7 @@
 import { BOT_CONFIG, PLAYER_CONFIG, WEAPONS, getItemDef } from '@extract/game-config';
-import { INPUT_BUTTONS, type InputCmd, type Vec2 } from '@extract/game-types';
+import { INPUT_BUTTONS, type InputCmd, type Vec2, type WeaponCategory, type WeaponDefinition } from '@extract/game-types';
 import { dist2, type Rng } from '@extract/shared';
+import { falloffMultiplier } from '../game/combat/damage';
 import type { ServerPlayer } from '../game/entities/ServerPlayer';
 import type { MatchRoom } from '../game/match/MatchRoom';
 import type { NavGrid } from './NavGrid';
@@ -22,6 +23,33 @@ function toAxis(dx: number, dy: number): [number, number] {
   return [Math.abs(nx) > 0.38 ? Math.sign(nx) : 0, Math.abs(ny) > 0.38 ? Math.sign(ny) : 0];
 }
 
+const PREFERRED_RANGE: Record<WeaponCategory, number> = {
+  SHOTGUN: 130,
+  SMG: 230,
+  PISTOL: 300,
+  RIFLE: 380,
+  LMG: 400,
+  MARKSMAN: 600,
+};
+
+/**
+ * How good a weapon is against a player at `distance`: inverse of the
+ * expected time-to-kill (falloff, pellets, spread vs. hitbox), so a pump
+ * shotgun's one-shot beats a rifle's DPS up close. 0 = out of range.
+ */
+export function engagementScore(def: WeaponDefinition, distance: number): number {
+  if (distance > def.range) return 0;
+  // Bots strafe while shooting, except with marksman rifles (they plant their feet).
+  const cone = Math.max(0.001, (def.category === 'MARKSMAN' ? def.spreadStanding : def.spreadMoving) + def.pelletSpread);
+  const hitChance = Math.min(1, PLAYER_CONFIG.radius / Math.max(1, distance * Math.tan(cone)));
+  const perShot = def.damage * def.pelletCount * hitChance * falloffMultiplier(distance, def.falloff);
+  if (perShot <= 0.01) return 0;
+  const shots = Math.ceil(PLAYER_CONFIG.maxHealth / perShot);
+  const rounds = def.fireMode === 'BURST' ? def.burstCount : 1;
+  const ttk = (Math.ceil(shots / rounds) - 1) * def.fireIntervalMs + ((shots - 1) % rounds) * def.burstDelayMs;
+  return 1000 / (ttk + 200);
+}
+
 /**
  * Deliberately simple bot: loots, fights what it sees, heals, and heads to
  * extraction. It only produces the same InputCmds / actions a human client
@@ -41,6 +69,9 @@ export class BotBrain {
   private lastPos: Vec2 = { x: 0, y: 0 };
   private stuckTicks = 0;
   private wantDash = false;
+  private nextWeaponCheckAt = 0;
+  /** Semi / burst weapons need the trigger released between pulls. */
+  private triggerDown = false;
   private readonly ignored = new Set<string>();
   private seq = 0;
   private readonly extractDelayMs: number;
@@ -79,7 +110,10 @@ export class BotBrain {
     if (enemy) {
       if (this.enemyId !== enemy.id) {
         this.reactionReadyAt = room.now + this.rng.range(BOT_CONFIG.reactionMs[0], BOT_CONFIG.reactionMs[1]);
-        this.selectBestWeapon(room, p);
+      }
+      if (this.enemyId !== enemy.id || room.now >= this.nextWeaponCheckAt) {
+        this.nextWeaponCheckAt = room.now + 1500;
+        this.selectBestWeapon(room, p, Math.sqrt(dist2(p.x, p.y, enemy.x, enemy.y)));
       }
       this.enemyId = enemy.id;
       this.mode = 'fight';
@@ -92,6 +126,9 @@ export class BotBrain {
       return;
     }
     this.enemyId = null;
+
+    const w = p.inventory.activeWeapon();
+    if (w && !p.reload && w.mag < WEAPONS[w.weaponId].magazineSize * 0.5) room.combat.startReload(p);
 
     if (!p.use) {
       if (p.hp < BOT_CONFIG.healBelowHp && p.inventory.countInBag('medkit') > 0) {
@@ -181,20 +218,27 @@ export class BotBrain {
     return best;
   }
 
-  private selectBestWeapon(room: MatchRoom, p: ServerPlayer): void {
+  /**
+   * Picks the weapon with the shortest expected time-to-kill at the current
+   * enemy distance (falloff, pellets, spread vs. hitbox). Sticky: only swaps
+   * for a clearly better option so bots do not juggle weapons.
+   */
+  private selectBestWeapon(room: MatchRoom, p: ServerPlayer, distance: number): void {
     let bestSlot = p.inventory.activeSlot;
     let bestScore = -1;
+    let currentScore = -1;
     p.inventory.weapons.forEach((w, slot) => {
       if (!w) return;
       const def = WEAPONS[w.weaponId];
       if (w.mag <= 0 && p.inventory.ammo[def.ammoType] <= 0) return;
-      const score = (def.damage * def.pellets * 1000) / def.fireIntervalMs;
+      const score = engagementScore(def, distance);
+      if (slot === p.inventory.activeSlot) currentScore = score;
       if (score > bestScore) {
         bestScore = score;
         bestSlot = slot;
       }
     });
-    room.combat.switchWeapon(p, bestSlot);
+    if (bestSlot !== p.inventory.activeSlot && bestScore > currentScore * 1.25) room.combat.switchWeapon(p, bestSlot);
   }
 
   private followPath(room: MatchRoom, p: ServerPlayer): [number, number] {
@@ -227,7 +271,7 @@ export class BotBrain {
       const d = Math.hypot(dx, dy);
       aim = Math.atan2(dy, dx) + this.aimError;
       const weapon = p.activeWeaponDef();
-      const preferred = weapon?.id === 'shotgun' ? 150 : weapon?.id === 'smg' ? 260 : 360;
+      const preferred = weapon ? PREFERRED_RANGE[weapon.category] : 300;
       let fx = 0;
       let fy = 0;
       if (d > preferred + 90) {
@@ -241,8 +285,20 @@ export class BotBrain {
       fx += (-dy / d) * 0.8 * this.strafeSign;
       fy += (dx / d) * 0.8 * this.strafeSign;
       [mx, my] = toAxis(fx * 100, fy * 100);
-      const canShoot = room.now >= this.reactionReadyAt && d <= BOT_CONFIG.engageRange && !p.use;
-      if (canShoot && room.world.collision.lineOfSight(p.x, p.y, enemy.x, enemy.y)) buttons |= INPUT_BUTTONS.FIRE;
+      const range = weapon ? Math.min(weapon.range * 0.95, weapon.category === 'MARKSMAN' ? BOT_CONFIG.visionRange : BOT_CONFIG.engageRange) : BOT_CONFIG.engageRange;
+      const canShoot = room.now >= this.reactionReadyAt && d <= range && !p.use;
+      if (canShoot && room.world.collision.lineOfSight(p.x, p.y, enemy.x, enemy.y)) {
+        // Marksman rifles are useless on the move: plant feet before the shot.
+        if (weapon?.category === 'MARKSMAN') {
+          mx = 0;
+          my = 0;
+        }
+        if (!weapon || weapon.fireMode === 'AUTO') buttons |= INPUT_BUTTONS.FIRE;
+        else {
+          this.triggerDown = !this.triggerDown;
+          if (this.triggerDown) buttons |= INPUT_BUTTONS.FIRE;
+        }
+      }
       if (this.wantDash) {
         buttons |= INPUT_BUTTONS.DASH;
         this.wantDash = false;

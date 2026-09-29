@@ -1,15 +1,17 @@
-import { MATCH_CONFIG, weaponFromIndex } from '@extract/game-config';
-import type { MatchGlobalState, ObstacleStyle, WeaponId } from '@extract/game-types';
+import { MATCH_CONFIG, PLAYER_CONFIG, WEAPONS, weaponFromIndex } from '@extract/game-config';
+import type { ImpactType, MatchGlobalState, MuzzleFlashType, ObstacleStyle, TracerType, WeaponDefinition } from '@extract/game-types';
 import * as THREE from 'three';
-import type { GameClient } from '../net/GameClient';
+import type { ImpactSurface } from '../audio/SoundEngine';
+import type { ClientBullet, GameClient } from '../net/GameClient';
+import { CasingPool } from './Casings';
 import { decalMat, glow } from './materials';
 import { createFallingDrop } from './models/CrateModel';
 import { ParticlePool } from './Particles';
 import { COLORS, GUN_HEIGHT } from './style';
 import { Decals, Textures } from './textures';
 
-const MAX_TRACERS = 600;
-const TRACER_LEN = 70;
+const MAX_TRACERS = 700;
+const MAX_LINGER = 48;
 const DROP_HEIGHT = 1500;
 
 type Surface = 'concrete' | 'metal' | 'wood' | 'sand' | 'foliage' | 'rock';
@@ -33,6 +35,42 @@ const SURFACE: Record<ObstacleStyle, Surface> = {
   rock: 'rock',
 };
 
+const SURFACE_SOUND: Record<Surface, ImpactSurface> = {
+  concrete: 'concrete',
+  rock: 'concrete',
+  metal: 'metal',
+  wood: 'wood',
+  sand: 'soft',
+  foliage: 'soft',
+};
+
+/** Tracer look per family. `faint` scales non-tracer rounds (tracerEvery > 1). */
+const TRACER: Record<TracerType, { len: number; width: number; intensity: number; faint: number; linger: number }> = {
+  light: { len: 52, width: 2, intensity: 2.6, faint: 0.3, linger: 0 },
+  standard: { len: 74, width: 2.6, intensity: 3.2, faint: 0.26, linger: 0 },
+  pellet: { len: 30, width: 1.7, intensity: 2.5, faint: 1, linger: 0 },
+  heavy: { len: 96, width: 3.3, intensity: 3.8, faint: 0.3, linger: 0 },
+  sniper: { len: 230, width: 4.2, intensity: 4.6, faint: 1, linger: 280 },
+  void: { len: 140, width: 3.8, intensity: 5, faint: 1, linger: 220 },
+};
+
+/** Impact size per weapon family. */
+const IMPACT_SCALE: Record<ImpactType, number> = { light: 0.7, standard: 1, pellet: 0.45, heavy: 1.5, void: 1 };
+
+/** Muzzle smoke / spark amount per flash family. */
+const MUZZLE_FX: Record<MuzzleFlashType, { smoke: number; sparks: number }> = {
+  pistol: { smoke: 0.5, sparks: 2 },
+  magnum: { smoke: 1, sparks: 4 },
+  smg: { smoke: 0.35, sparks: 1 },
+  suppressed: { smoke: 0.25, sparks: 0 },
+  rifle: { smoke: 0.6, sparks: 2 },
+  battle: { smoke: 1, sparks: 4 },
+  shotgun: { smoke: 1.4, sparks: 7 },
+  sniper: { smoke: 1.3, sparks: 5 },
+  lmg: { smoke: 0.7, sparks: 2 },
+  void: { smoke: 0, sparks: 5 },
+};
+
 interface ZoneVisual {
   group: THREE.Group;
   ring: THREE.Mesh;
@@ -45,6 +83,18 @@ interface ZoneVisual {
   innerMat: THREE.MeshBasicMaterial;
   beaconMat: THREE.MeshBasicMaterial;
   nextMote: number;
+}
+
+interface Linger {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+  color: number;
+  width: number;
+  intensity: number;
+  born: number;
+  life: number;
 }
 
 /** Sets an unlit HDR colour in place: base colour scaled by intensity. */
@@ -60,6 +110,15 @@ const quadGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 
+export interface EffectsHooks {
+  /** A remote player's shot appeared (pellets of one shot are reported once). */
+  onRemoteShot(ownerId: number, def: WeaponDefinition, x: number, y: number, angle: number): void;
+  /** A round hit the world (for impact sounds near the listener). */
+  onImpact(surface: ImpactSurface, x: number, y: number): void;
+  /** An enemy round passed close to the local player. */
+  onWhiz(x: number, y: number): void;
+}
+
 /** All transient / dynamic visuals that are not tied to a single entity. */
 export class Effects {
   readonly root = new THREE.Group();
@@ -67,8 +126,14 @@ export class Effects {
   readonly glowPool: ParticlePool;
   /** Alpha-blended particles (smoke, dust, debris, blood). */
   readonly smokePool: ParticlePool;
+  readonly casings = new CasingPool();
   private readonly tracers: THREE.InstancedMesh;
+  private readonly lingerMesh: THREE.InstancedMesh;
+  private readonly lingers: Linger[] = [];
   private readonly seenBullets = new Set<number>();
+  /** Bullet id -> distance along its path where it passes the local player (near miss). */
+  private readonly whizAt = new Map<number, number>();
+  private readonly lastRemoteShot = new Map<number, number>();
   private readonly zones = new Map<string, ZoneVisual>();
   private readonly bountyRings: THREE.Mesh[] = [];
   private readonly kingpinRings: THREE.Mesh[] = [];
@@ -80,26 +145,29 @@ export class Effects {
   private readonly c = new THREE.Color();
   private readonly up = new THREE.Vector3(0, 1, 0);
 
-  /** onFire: a remote player's shot appeared (not our own: those are predicted). */
-  constructor(private readonly onFire: (ownerId: number, weaponIndex: number, x: number, y: number) => void) {
-    this.tracers = new THREE.InstancedMesh(
-      quadGeo,
-      new THREE.MeshBasicMaterial({ map: Textures.tracer(), color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
-      MAX_TRACERS,
-    );
-    this.tracers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.tracers.frustumCulled = false;
-    this.tracers.count = 0;
-    this.tracers.renderOrder = 10;
-    this.glowPool = new ParticlePool(2400, Textures.particle(), 'additive');
-    this.smokePool = new ParticlePool(1600, Textures.smoke(), 'normal', 0.12);
-    this.root.add(this.tracers, this.smokePool.mesh, this.glowPool.mesh);
+  constructor(private readonly hooks: EffectsHooks) {
+    const tracerMat = () =>
+      new THREE.MeshBasicMaterial({ map: Textures.tracer(), color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    this.tracers = new THREE.InstancedMesh(quadGeo, tracerMat(), MAX_TRACERS);
+    this.lingerMesh = new THREE.InstancedMesh(quadGeo, new THREE.MeshBasicMaterial({ map: Textures.beam(), color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), MAX_LINGER);
+    for (const m of [this.tracers, this.lingerMesh]) {
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      m.frustumCulled = false;
+      m.count = 0;
+      m.renderOrder = 10;
+    }
+    // Linger beams use a soft cross-section: rotate the vertical beam gradient sideways.
+    (this.lingerMesh.material as THREE.MeshBasicMaterial).map = Textures.particle();
+    this.glowPool = new ParticlePool(2600, Textures.particle(), 'additive');
+    this.smokePool = new ParticlePool(1800, Textures.smoke(), 'normal', 0.12);
+    this.root.add(this.tracers, this.lingerMesh, this.smokePool.mesh, this.glowPool.mesh, this.casings.mesh);
   }
 
   /** Particle budget for the current graphics quality (0..1). */
   setDensity(d: number): void {
     this.glowPool.density = d;
     this.smokePool.density = d;
+    this.casings.density = Math.max(0.35, d);
   }
 
   // ------------------------------------------------------------------ emitters
@@ -115,73 +183,72 @@ export class Effects {
     this.smokePool.spawn({ x, y: 6, z, vy: 10, drag: 2, color: 0x8a8377, alpha: 0.25, size: 16, endSize: 34, life: 500 });
   }
 
-  /** Muzzle flash sparks + a little smoke drifting away from the barrel. */
-  muzzle(x: number, z: number, angle: number, weapon: WeaponId | null): void {
+  /** Muzzle smoke + sparks at a weapon's muzzle (world position), per weapon family. */
+  muzzle(x: number, y: number, z: number, angle: number, def: WeaponDefinition): void {
+    const fx = MUZZLE_FX[def.visual.muzzleFlash];
     const dx = Math.cos(angle);
     const dz = Math.sin(angle);
-    const heavy = weapon === 'shotgun';
-    this.glowPool.spawn({ x, y: GUN_HEIGHT + 2, z, color: 0xffc46b, intensity: 4, size: heavy ? 44 : 30, endSize: 10, life: 70 });
-    const n = heavy ? 7 : 3;
-    for (let i = 0; i < n; i++) {
-      const a = angle + rnd(-0.35, 0.35);
-      const sp = rnd(260, 620);
-      this.glowPool.spawn({ x, y: GUN_HEIGHT + 2, z, vx: Math.cos(a) * sp, vy: rnd(-20, 60), vz: Math.sin(a) * sp, drag: 9, color: 0xffb454, intensity: 3.5, size: 2.2, life: rnd(90, 170), stretch: 0.05 });
+    const voidGun = def.visual.muzzleFlash === 'void';
+    for (let i = 0; i < fx.sparks; i++) {
+      const a = angle + rnd(-0.45, 0.45);
+      const sp = rnd(260, 640);
+      this.glowPool.spawn({ x, y, z, vx: Math.cos(a) * sp, vy: rnd(-20, 70), vz: Math.sin(a) * sp, drag: 9, color: voidGun ? 0xc99bff : 0xffb454, intensity: 3.5, size: voidGun ? 2.6 : 2, life: rnd(80, 170), stretch: 0.05 });
     }
-    this.smokePool.spawn({ x: x + dx * 6, y: GUN_HEIGHT, z: z + dz * 6, vx: dx * 40, vy: 20, vz: dz * 40, drag: 3, color: 0x9a968d, alpha: heavy ? 0.4 : 0.22, size: heavy ? 14 : 9, endSize: heavy ? 46 : 28, life: heavy ? 900 : 600 });
+    if (fx.smoke > 0) {
+      const n = fx.smoke >= 1 ? 2 : 1;
+      for (let i = 0; i < n; i++) {
+        const sp = rnd(30, 60) * fx.smoke;
+        this.smokePool.spawn({ x: x + dx * 4, y, z: z + dz * 4, vx: dx * sp + rnd(-8, 8), vy: rnd(14, 26), vz: dz * sp + rnd(-8, 8), drag: 2.6, color: 0x9a968d, alpha: 0.16 + 0.14 * Math.min(1, fx.smoke), size: 7 * fx.smoke + 4, endSize: 26 * fx.smoke + 14, life: 500 + 450 * fx.smoke, rotation: rnd(0, 6), spin: rnd(-1, 1) });
+      }
+    }
+    if (def.pelletCount > 1) {
+      // Shotgun: a hot cone of burning powder.
+      for (let i = 0; i < 6; i++) {
+        const a = angle + rnd(-0.25, 0.25);
+        const sp = rnd(300, 560);
+        this.glowPool.spawn({ x, y, z, vx: Math.cos(a) * sp, vy: rnd(-10, 30), vz: Math.sin(a) * sp, drag: 12, color: 0xff9a3c, intensity: 3, size: 5, endSize: 1, life: rnd(60, 120) });
+      }
+    }
   }
 
-  /** Brass casing flicked out to the right of the weapon. */
-  shell(x: number, z: number, angle: number): void {
-    const side = angle + Math.PI / 2;
-    const sp = rnd(90, 150);
-    this.glowPool.spawn({
-      x,
-      y: GUN_HEIGHT,
-      z,
-      vx: Math.cos(side) * sp + rnd(-20, 20),
-      vy: rnd(90, 150),
-      vz: Math.sin(side) * sp + rnd(-20, 20),
-      gravity: 700,
-      drag: 1.5,
-      color: 0xd9a441,
-      intensity: 1.3,
-      size: 2.4,
-      life: 700,
-      stretch: 0.01,
-    });
-  }
-
-  /** Bullet hitting the world: reaction depends on the surface. */
-  impact(x: number, z: number, dirX: number, dirZ: number, surface: ObstacleStyle | null): void {
+  /** Bullet hitting the world: reaction depends on the surface and the weapon. */
+  impact(x: number, z: number, dirX: number, dirZ: number, surface: ObstacleStyle | null, type: ImpactType = 'standard'): void {
     const kind: Surface = surface ? SURFACE[surface] : 'concrete';
+    const k = IMPACT_SCALE[type];
     const back = Math.atan2(-dirZ, -dirX);
     const burst = (n: number, speed: [number, number], spread: number, fn: (vx: number, vy: number, vz: number) => void) => {
-      for (let i = 0; i < n; i++) {
+      const count = Math.max(1, Math.round(n * k));
+      for (let i = 0; i < count; i++) {
         const a = back + rnd(-spread, spread);
         const sp = rnd(speed[0], speed[1]);
         fn(Math.cos(a) * sp, rnd(40, 160), Math.sin(a) * sp);
       }
     };
     const y = GUN_HEIGHT;
+    if (type === 'void') {
+      this.glowPool.spawn({ x, y, z, color: 0xb57bff, intensity: 4.5, size: 24, endSize: 4, life: 140 });
+      burst(9, [160, 380], 1.3, (vx, vy, vz) => this.glowPool.spawn({ x, y, z, vx, vy, vz, drag: 5, color: 0xd6b8ff, intensity: 3.6, size: 2.2, life: rnd(180, 320), stretch: 0.03 }));
+      return;
+    }
     switch (kind) {
       case 'metal':
-        this.glowPool.spawn({ x, y, z, color: 0xfff1c4, intensity: 3.5, size: 16, endSize: 4, life: 90 });
+        this.glowPool.spawn({ x, y, z, color: 0xfff1c4, intensity: 3.5, size: 16 * k, endSize: 4, life: 90 });
         burst(8, [180, 420], 1.1, (vx, vy, vz) =>
           this.glowPool.spawn({ x, y, z, vx, vy, vz, gravity: 520, drag: 2, color: 0xffb347, intensity: 3.2, size: 1.8, life: rnd(180, 380), stretch: 0.045 }),
         );
-        this.smokePool.spawn({ x, y, z, vy: 18, drag: 2, color: 0x6e6a64, alpha: 0.25, size: 6, endSize: 20, life: 450 });
+        this.smokePool.spawn({ x, y, z, vy: 18, drag: 2, color: 0x6e6a64, alpha: 0.25, size: 6 * k, endSize: 20 * k, life: 450 });
         break;
       case 'wood':
         burst(6, [90, 220], 0.9, (vx, vy, vz) =>
           this.smokePool.spawn({ x, y, z, vx, vy, vz, gravity: 600, drag: 1.5, color: 0x8b6a42, alpha: 0.95, size: 3.4, endSize: 2.4, life: rnd(350, 600), spin: rnd(-12, 12) }),
         );
-        this.smokePool.spawn({ x, y, z, vx: Math.cos(back) * 30, vy: 20, vz: Math.sin(back) * 30, drag: 2.5, color: 0xa08560, alpha: 0.35, size: 8, endSize: 26, life: 600 });
+        this.smokePool.spawn({ x, y, z, vx: Math.cos(back) * 30, vy: 20, vz: Math.sin(back) * 30, drag: 2.5, color: 0xa08560, alpha: 0.35, size: 8 * k, endSize: 26 * k, life: 600 });
         break;
       case 'sand':
         burst(10, [60, 180], 1.2, (vx, vy, vz) =>
           this.smokePool.spawn({ x, y, z, vx, vy, vz, gravity: 520, drag: 1.2, color: 0xb59c70, alpha: 0.9, size: 2, endSize: 1.5, life: rnd(300, 500) }),
         );
-        this.smokePool.spawn({ x, y, z, vx: Math.cos(back) * 40, vy: 25, vz: Math.sin(back) * 40, drag: 2.5, color: 0xb8a27a, alpha: 0.45, size: 10, endSize: 36, life: 800 });
+        this.smokePool.spawn({ x, y, z, vx: Math.cos(back) * 40, vy: 25, vz: Math.sin(back) * 40, drag: 2.5, color: 0xb8a27a, alpha: 0.45, size: 10 * k, endSize: 36 * k, life: 800 });
         break;
       case 'foliage':
         burst(6, [60, 160], 1.4, (vx, vy, vz) =>
@@ -190,15 +257,20 @@ export class Effects {
         break;
       default:
         // Concrete / rock: chips + a dusty puff + a couple of sparks.
-        this.glowPool.spawn({ x, y, z, color: 0xfff1c4, intensity: 2.5, size: 10, endSize: 3, life: 70 });
+        this.glowPool.spawn({ x, y, z, color: 0xfff1c4, intensity: 2.5, size: 10 * k, endSize: 3, life: 70 });
         burst(5, [120, 260], 1, (vx, vy, vz) =>
           this.smokePool.spawn({ x, y, z, vx, vy, vz, gravity: 620, drag: 1.2, color: 0x6d6b66, alpha: 1, size: 2.4, endSize: 2, life: rnd(300, 520) }),
         );
         burst(2, [200, 380], 0.8, (vx, vy, vz) =>
           this.glowPool.spawn({ x, y, z, vx, vy, vz, gravity: 520, drag: 2, color: 0xffc46b, intensity: 3, size: 1.6, life: 160, stretch: 0.04 }),
         );
-        this.smokePool.spawn({ x, y, z, vx: Math.cos(back) * 34, vy: 22, vz: Math.sin(back) * 34, drag: 2.4, color: 0x9d988e, alpha: 0.42, size: 8, endSize: 30, life: 750 });
+        this.smokePool.spawn({ x, y, z, vx: Math.cos(back) * 34, vy: 22, vz: Math.sin(back) * 34, drag: 2.4, color: 0x9d988e, alpha: 0.42, size: 8 * k, endSize: 30 * k, life: 750 });
     }
+  }
+
+  /** A round that flew its full range: a small puff where it drops into the ground. */
+  groundHit(x: number, z: number): void {
+    this.smokePool.spawn({ x, y: 3, z, vy: 16, drag: 2.5, color: 0x7d766b, alpha: 0.3, size: 6, endSize: 18, life: 500 });
   }
 
   /** A bullet hit a character: stylised blood mist, or blue sparks when armour took it. */
@@ -246,6 +318,18 @@ export class Effects {
     }
   }
 
+  /** Legendary moment: a ring shockwave of light + tall rising column of sparks. */
+  legendaryBurst(x: number, z: number, color: number): void {
+    this.lootBurst(x, z, color, 4);
+    for (let i = 0; i < 28; i++) {
+      const a = (i / 28) * Math.PI * 2;
+      this.glowPool.spawn({ x, y: 6, z, vx: Math.cos(a) * 260, vy: 10, vz: Math.sin(a) * 260, drag: 3.5, color, intensity: 3.2, size: 5, endSize: 1, life: 520 });
+    }
+    for (let i = 0; i < 16; i++) {
+      this.glowPool.spawn({ x: x + rnd(-6, 6), y: 10, z: z + rnd(-6, 6), vy: rnd(220, 420), drag: 1.2, color: 0xfff3c4, intensity: 3.5, size: 2.4, endSize: 0.5, life: rnd(700, 1100), stretch: 0.02 });
+    }
+  }
+
   /** Crate lid opening: dust + a flash in the container's colour. */
   crateOpen(x: number, z: number, color: number | null, big: boolean): void {
     for (let i = 0; i < (big ? 8 : 5); i++) {
@@ -255,14 +339,74 @@ export class Effects {
     if (color !== null) this.lootBurst(x, z, color, big ? 4 : 2);
   }
 
+  /** Gentle glint rising from a valuable item lying on the ground. */
+  mote(x: number, z: number, color: number): void {
+    this.glowPool.spawn({ x: x + rnd(-10, 10), y: 8, z: z + rnd(-10, 10), vy: rnd(30, 60), color, intensity: 2.2, size: 2.6, endSize: 0.6, life: rnd(900, 1400) });
+  }
+
   // ------------------------------------------------------------------ frame
 
-  update(client: GameClient, _dt: number, time: number): void {
+  update(client: GameClient, dt: number, time: number): void {
     this.updateBullets(client);
+    this.updateLingers();
     this.updateGlobal(client, client.global, time);
     const t = time / 1000;
     this.glowPool.update(t);
     this.smokePool.update(t);
+    this.casings.update(dt);
+  }
+
+  /** Is the round ending at (x, z) on a character that still has armour? */
+  private armorAt(client: GameClient, x: number, z: number): boolean {
+    const r2 = (PLAYER_CONFIG.radius + 8) ** 2;
+    for (const p of client.players.values()) if ((p.x - x) ** 2 + (p.y - z) ** 2 < r2) return p.armor > 0;
+    const s = client.self;
+    if (s && (client.renderX - x) ** 2 + (client.renderY - z) ** 2 < r2) return s.armor > 0;
+    return false;
+  }
+
+  private onFirstSight(client: GameClient, b: ClientBullet, def: WeaponDefinition): void {
+    const angle = Math.atan2(b.dy, b.dx);
+    if (!b.local && !b.ghost) {
+      // One muzzle effect / sound per shot, not per pellet.
+      const last = this.lastRemoteShot.get(b.ownerId) ?? 0;
+      if (b.born - last > 25) {
+        this.lastRemoteShot.set(b.ownerId, b.born);
+        this.hooks.onRemoteShot(b.ownerId, def, b.x0, b.y0, angle);
+      }
+      // Near miss: closest approach to the local player.
+      if (client.canPredict) {
+        const px = client.renderX - b.x0;
+        const pz = client.renderY - b.y0;
+        const along = px * b.dx + pz * b.dy;
+        const perp = Math.abs(px * b.dy - pz * b.dx);
+        if (along > 40 && along < b.maxDist && perp > PLAYER_CONFIG.radius && perp < 75) this.whizAt.set(b.id, along);
+      }
+    }
+    // Sniper / void rounds leave a lingering beam along their whole path.
+    const tracer = TRACER[def.visual.tracer];
+    if (tracer.linger > 0 && !b.ghost) {
+      const start = def.visual.muzzleDistance;
+      const end = b.maxDist;
+      if (this.lingers.length >= MAX_LINGER) this.lingers.shift();
+      this.lingers.push({
+        x0: b.x0 + b.dx * start,
+        z0: b.y0 + b.dy * start,
+        x1: b.x0 + b.dx * end,
+        z1: b.y0 + b.dy * end,
+        color: def.visual.tracerColor,
+        width: tracer.width * 1.6,
+        intensity: def.visual.tracer === 'void' ? 1.6 : 0.9,
+        born: performance.now(),
+        life: tracer.linger,
+      });
+      if (def.visual.tracer === 'sniper') {
+        // Vapour trail.
+        for (let d = start; d < end; d += 55) {
+          this.smokePool.spawn({ x: b.x0 + b.dx * d, y: GUN_HEIGHT, z: b.y0 + b.dy * d, vy: rnd(3, 8), drag: 1, color: 0xc8ccd2, alpha: 0.11, size: 7, endSize: 20, life: rnd(900, 1400) });
+        }
+      }
+    }
   }
 
   private updateBullets(client: GameClient): void {
@@ -271,37 +415,50 @@ export class Effects {
     const bullets = client.bullets;
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i]!;
-      const weapon = weaponFromIndex(b.weapon);
+      const def = weaponFromIndex(b.weapon) ?? WEAPONS.basic_pistol;
       if (!this.seenBullets.has(b.id)) {
         this.seenBullets.add(b.id);
-        if (!b.local && !b.ghost) {
-          this.onFire(b.ownerId, b.weapon, b.x0, b.y0);
-          this.muzzle(b.x0 + b.dx * 34, b.y0 + b.dy * 34, Math.atan2(b.dy, b.dx), weapon?.id ?? null);
-        }
+        this.onFirstSight(client, b, def);
       }
       const end = b.endDist ?? b.maxDist;
-      const dist = ((now - b.born) / 1000) * b.speed + 30;
+      const start = def.visual.muzzleDistance;
+      const dist = ((now - b.born) / 1000) * b.speed + start;
+      const whiz = this.whizAt.get(b.id);
+      if (whiz !== undefined && dist >= whiz) {
+        this.whizAt.delete(b.id);
+        if (whiz < end) this.hooks.onWhiz(b.x0 + b.dx * whiz, b.y0 + b.dy * whiz);
+      }
       if (dist >= end) {
         const hx = b.x0 + b.dx * end;
         const hz = b.y0 + b.dy * end;
-        // Ghosts (server copies of our own shots) only confirm player hits;
-        // the predicted tracer already showed the wall impact.
-        if (b.hitPlayer) this.playerHit(hx, hz, b.dx, b.dy, false);
-        else if (!b.ghost && end < b.maxDist + 1 && b.surface) this.impact(hx, hz, b.dx, b.dy, b.surface);
+        // Hits on players are only shown once the server confirms them (remote
+        // bullets or the ghost copy of our own); predicted tracers just stop.
+        if (b.hitPlayer && !b.local) this.playerHit(hx, hz, b.dx, b.dy, this.armorAt(client, hx, hz));
+        else if (!b.ghost && !b.hitPlayer) {
+          if (end < b.maxDist + 1 && b.surface) {
+            this.impact(hx, hz, b.dx, b.dy, b.surface, def.visual.impact);
+            this.hooks.onImpact(SURFACE_SOUND[SURFACE[b.surface]], hx, hz);
+          } else if (end >= b.maxDist - 1 && !b.surface && def.pelletCount === 1) this.groundHit(hx, hz);
+        }
         bullets.splice(i, 1);
         this.seenBullets.delete(b.id);
+        this.whizAt.delete(b.id);
         continue;
       }
       if (n >= MAX_TRACERS || b.ghost) continue;
+      const tr = TRACER[def.visual.tracer];
+      const faint = b.tracer ? 1 : tr.faint;
       const head = Math.min(dist, end);
-      const tail = Math.max(30, head - TRACER_LEN);
+      const len = tr.len * (b.tracer ? 1 : 0.7);
+      const tail = Math.max(start, head - len);
+      if (head - tail < 1) continue;
       const mid = (head + tail) / 2;
       this.v.set(b.x0 + b.dx * mid, GUN_HEIGHT, b.y0 + b.dy * mid);
       this.q.setFromAxisAngle(this.up, -Math.atan2(b.dy, b.dx));
-      this.s.set(Math.max(1, head - tail), 1, weapon?.id === 'shotgun' ? 2.4 : 3.2);
+      this.s.set(head - tail, 1, tr.width * (b.tracer ? 1 : 0.6));
       this.m4.compose(this.v, this.q, this.s);
       this.tracers.setMatrixAt(n, this.m4);
-      this.c.setHex(weapon?.bulletColor ?? 0xffffff).multiplyScalar(3.4);
+      this.c.setHex(def.visual.tracerColor).multiplyScalar(tr.intensity * faint);
       this.tracers.setColorAt(n, this.c);
       n++;
     }
@@ -309,6 +466,32 @@ export class Effects {
     this.tracers.instanceMatrix.needsUpdate = true;
     if (this.tracers.instanceColor) this.tracers.instanceColor.needsUpdate = true;
     if (this.seenBullets.size > 4000) this.seenBullets.clear();
+  }
+
+  private updateLingers(): void {
+    const now = performance.now();
+    let n = 0;
+    for (let i = this.lingers.length - 1; i >= 0; i--) {
+      const l = this.lingers[i]!;
+      const t = (now - l.born) / l.life;
+      if (t >= 1) {
+        this.lingers.splice(i, 1);
+        continue;
+      }
+      const dx = l.x1 - l.x0;
+      const dz = l.z1 - l.z0;
+      this.v.set((l.x0 + l.x1) / 2, GUN_HEIGHT, (l.z0 + l.z1) / 2);
+      this.q.setFromAxisAngle(this.up, -Math.atan2(dz, dx));
+      this.s.set(Math.hypot(dx, dz), 1, l.width * (1 + t * 1.5));
+      this.m4.compose(this.v, this.q, this.s);
+      this.lingerMesh.setMatrixAt(n, this.m4);
+      this.c.setHex(l.color).multiplyScalar(l.intensity * (1 - t) * (1 - t));
+      this.lingerMesh.setColorAt(n, this.c);
+      n++;
+    }
+    this.lingerMesh.count = n;
+    this.lingerMesh.instanceMatrix.needsUpdate = true;
+    if (this.lingerMesh.instanceColor) this.lingerMesh.instanceColor.needsUpdate = true;
   }
 
   private zoneVisual(id: string, x: number, z: number, r: number): ZoneVisual {
@@ -448,7 +631,9 @@ export class Effects {
   dispose(): void {
     this.root.removeFromParent();
     (this.tracers.material as THREE.Material).dispose();
+    (this.lingerMesh.material as THREE.Material).dispose();
     this.glowPool.dispose();
     this.smokePool.dispose();
+    this.casings.dispose();
   }
 }

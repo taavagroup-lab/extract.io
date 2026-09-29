@@ -86,7 +86,7 @@ export class SnapshotBuilder {
       this.seen.add(it.id);
       if (view.knownItems.has(it.id)) continue;
       view.knownItems.add(it.id);
-      ie.push({ id: it.id, x: Math.round(it.x), y: Math.round(it.y), itemId: it.itemId, qty: it.qty });
+      ie.push(it.mag === undefined ? { id: it.id, x: Math.round(it.x), y: Math.round(it.y), itemId: it.itemId, qty: it.qty } : { id: it.id, x: Math.round(it.x), y: Math.round(it.y), itemId: it.itemId, qty: it.qty, mag: it.mag });
     }
     const il: number[] = [];
     for (const id of view.knownItems) {

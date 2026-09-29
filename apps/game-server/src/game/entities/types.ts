@@ -35,4 +35,8 @@ export interface Bullet {
   remaining: number;
   traveled: number;
   damage: number;
+  /** Players this round may still pass through. */
+  pierce: number;
+  /** Player just pierced (the next segment starts inside them). */
+  ignoreId: number;
 }

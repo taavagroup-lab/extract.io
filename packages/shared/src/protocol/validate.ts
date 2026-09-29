@@ -1,4 +1,4 @@
-import { NETWORK_CONFIG, PLAYER_CONFIG, isItemId } from '@extract/game-config';
+import { NETWORK_CONFIG, PLAYER_CONFIG, isItemId, isWeaponId } from '@extract/game-config';
 import type { ClientAction, ClientMessage, DevCommand, InputCmd, InventoryOp } from '@extract/game-types';
 
 /**
@@ -74,6 +74,10 @@ function validateDev(v: unknown): DevCommand | null {
       return isFiniteNum(v.x) && isFiniteNum(v.y) ? { cmd: 'teleport', x: v.x, y: v.y } : null;
     case 'setMatchTime':
       return isIntIn(v.ms, 0, 60 * 60 * 1000) ? { cmd: 'setMatchTime', ms: v.ms } : null;
+    case 'giveWeapon':
+      return isWeaponId(v.weaponId) ? { cmd: 'giveWeapon', weaponId: v.weaponId } : null;
+    case 'infiniteAmmo':
+      return typeof v.on === 'boolean' ? { cmd: 'infiniteAmmo', on: v.on } : null;
     case 'activateExtraction':
     case 'giveLegendary':
     case 'heal':

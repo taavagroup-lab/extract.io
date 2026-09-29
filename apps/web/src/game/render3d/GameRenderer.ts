@@ -1,5 +1,5 @@
-import { NETWORK_CONFIG, THREAT_CONFIG, WEAPONS, weaponFromIndex, weaponIndex } from '@extract/game-config';
-import { PLAYER_FLAGS, type Rarity } from '@extract/game-types';
+import { NETWORK_CONFIG, RARITY_CONFIG, THREAT_CONFIG, WEAPONS, getItemDef, weaponIndex } from '@extract/game-config';
+import { PLAYER_FLAGS, type MuzzleFlashType, type Rarity, type WeaponDefinition } from '@extract/game-types';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -8,7 +8,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { isTierAtLeast } from '@extract/shared';
 import { settings, type QualitySetting } from '../../lib/settings';
-import { sound } from '../audio/SoundEngine';
+import { sound, type ImpactSurface } from '../audio/SoundEngine';
 import type { InputController } from '../input/InputController';
 import type { GameClient } from '../net/GameClient';
 import { Effects } from './Effects';
@@ -21,19 +21,40 @@ import { CrateModel } from './models/CrateModel';
 import { GroundItemModel } from './models/ItemModels';
 import { skinFor } from './skins';
 import { COLORS, GUN_HEIGHT } from './style';
+import { WeaponDebug } from './WeaponDebug';
 
 const FOV = 38;
-const TILT = THREE.MathUtils.degToRad(15);
+const TILT = THREE.MathUtils.degToRad(19);
 const SHADOW_EXTENT = 1150;
+/** Camera recoil spring (stiffness, damping) and its max offset (world units). */
+const KICK_K = 190;
+const KICK_C = 2 * Math.sqrt(KICK_K);
+const KICK_MAX = 20;
 
 type QualityLevel = Exclude<QualitySetting, 'auto'>;
 const LEVELS: QualityLevel[] = ['low', 'medium', 'high', 'ultra'];
-const PRESETS: Record<QualityLevel, { dpr: number; composer: boolean; bloom: boolean; shadow: number }> = {
-  low: { dpr: 0.75, composer: false, bloom: false, shadow: 1024 },
-  medium: { dpr: 1, composer: true, bloom: false, shadow: 1024 },
-  high: { dpr: 1.5, composer: true, bloom: true, shadow: 2048 },
-  ultra: { dpr: 2, composer: true, bloom: true, shadow: 4096 },
+const PRESETS: Record<QualityLevel, { dpr: number; composer: boolean; bloom: boolean; shadow: number; particles: number }> = {
+  low: { dpr: 0.75, composer: false, bloom: false, shadow: 1024, particles: 0.35 },
+  medium: { dpr: 1, composer: true, bloom: false, shadow: 1024, particles: 0.7 },
+  high: { dpr: 1.5, composer: true, bloom: true, shadow: 2048, particles: 1 },
+  ultra: { dpr: 2, composer: true, bloom: true, shadow: 4096, particles: 1 },
 };
+
+/** Real light thrown by our own muzzle flash (remote flashes use cheap ground decals). */
+const MUZZLE_LIGHT: Record<MuzzleFlashType, { intensity: number; color: number }> = {
+  pistol: { intensity: 6000, color: 0xffc27a },
+  magnum: { intensity: 10000, color: 0xffb262 },
+  smg: { intensity: 5000, color: 0xffc98a },
+  suppressed: { intensity: 1800, color: 0xffe0b8 },
+  rifle: { intensity: 8000, color: 0xffbd72 },
+  battle: { intensity: 11000, color: 0xffac58 },
+  shotgun: { intensity: 14000, color: 0xffa24a },
+  sniper: { intensity: 13000, color: 0xffc680 },
+  lmg: { intensity: 7500, color: 0xffb468 },
+  void: { intensity: 10000, color: 0xa35cff },
+};
+
+const RELOAD_CIRC = 2 * Math.PI * 17;
 
 /**
  * Three.js renderer for the match. Reads the GameClient every frame and
@@ -50,18 +71,26 @@ export class GameRenderer {
   private readonly muzzleLight = new THREE.PointLight(0xffc27a, 0, 320, 2);
   private readonly effects: Effects;
   private readonly labels: Labels;
+  private readonly debug: WeaponDebug;
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribeSettings: () => void;
   private map: MapVisuals | null = null;
   private self: CharacterModel | null = null;
   private readonly players = new Map<number, CharacterModel>();
+  /** Bodies playing their death animation (no longer replicated). */
+  private readonly dying: CharacterModel[] = [];
+  /** Killed players whose replication has not been removed yet (never re-spawn a model). */
+  private readonly deadIds = new Set<number>();
   private readonly lastHp = new Map<number, number>();
+  private readonly lastArmor = new Map<number, number>();
   private readonly items = new Map<number, GroundItemModel>();
+  private itemsSynced = false;
   private readonly crates = new Map<number, CrateModel>();
   private readonly seenIds = new Set<number>();
 
   // Input / aim
   private readonly pointer = new THREE.Vector2(0, 0);
+  private readonly cursorPx = new THREE.Vector2(0, 0);
   private hasPointer = false;
   private readonly raycaster = new THREE.Raycaster();
   private readonly aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -GUN_HEIGHT);
@@ -71,12 +100,18 @@ export class GameRenderer {
   // Camera
   private readonly camTarget = new THREE.Vector3();
   private readonly look = new THREE.Vector2();
+  private readonly camKick = new THREE.Vector2();
+  private readonly camKickVel = new THREE.Vector2();
   private shake = 0;
 
   // DOM overlays
   private readonly crosshair: HTMLDivElement;
+  private readonly chRing: SVGCircleElement;
+  private readonly chNote: HTMLSpanElement;
   private readonly fpsEl: HTMLDivElement;
-  private spread = 0;
+  private chGap = 8;
+  private chPunch = 0;
+  private chNoteText = '';
 
   // Timing / quality
   private lastFrame = performance.now();
@@ -92,12 +127,17 @@ export class GameRenderer {
   private debugZoom = 1;
 
   // Audio / feel bookkeeping
-  private lastReloadMs = 0;
+  private reloadKey = -1;
+  private reloadPhase = 0;
   private lastExtractSecond = -1;
   private lastStatus = '';
   private lastHeartbeat = 0;
-  private lastDustAt = new Map<number, number>();
-  private readonly shotSoundAt = new Map<number, number>();
+  private lastImpactSoundAt = 0;
+  private lastWhizAt = 0;
+  private nextMoteAt = 0;
+  private readonly lastDustAt = new Map<number, number>();
+  private readonly v1 = new THREE.Vector3();
+  private readonly v2 = new THREE.Vector3();
 
   constructor(
     private readonly container: HTMLElement,
@@ -139,9 +179,14 @@ export class GameRenderer {
     this.sun.shadow.radius = 2.5;
     this.scene.add(this.sun, this.sun.target, this.muzzleLight);
 
-    this.effects = new Effects((ownerId, wIndex, x, y) => this.onRemoteShot(ownerId, wIndex, x, y));
+    this.effects = new Effects({
+      onRemoteShot: (ownerId, def, x, y, angle) => this.onRemoteShot(ownerId, def, x, y, angle),
+      onImpact: (surface, x, y) => this.onImpact(surface, x, y),
+      onWhiz: (x) => this.onWhiz(x),
+    });
     this.scene.add(this.effects.root);
     this.labels = new Labels(container);
+    this.debug = new WeaponDebug(this.scene, container);
 
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, rt);
@@ -155,7 +200,12 @@ export class GameRenderer {
 
     this.crosshair = document.createElement('div');
     this.crosshair.className = 'crosshair';
-    this.crosshair.innerHTML = '<i class="ch-t"></i><i class="ch-b"></i><i class="ch-l"></i><i class="ch-r"></i><b class="ch-dot"></b><em class="ch-hit"></em>';
+    this.crosshair.innerHTML =
+      '<div class="ch-spread"><i class="ch-t"></i><i class="ch-b"></i><i class="ch-l"></i><i class="ch-r"></i><s class="ch-circle"></s></div>' +
+      `<svg class="ch-ring" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="17" stroke-dasharray="${RELOAD_CIRC.toFixed(2)}" stroke-dashoffset="${RELOAD_CIRC.toFixed(2)}"/></svg>` +
+      '<b class="ch-dot"></b><em class="ch-hit"></em><span class="ch-note"></span>';
+    this.chRing = this.crosshair.querySelector('circle')!;
+    this.chNote = this.crosshair.querySelector('.ch-note')!;
     container.appendChild(this.crosshair);
     this.fpsEl = document.createElement('div');
     this.fpsEl.className = 'fps-meter';
@@ -185,6 +235,36 @@ export class GameRenderer {
         zoom: (k: number) => {
           this.debugZoom = Math.max(0.15, Math.min(1, k));
         },
+        setLevel: (l: QualityLevel) => this.setLevel(l, true),
+        /** Smoke-test helpers: point the cursor at a screen fraction / hold the trigger. */
+        aimAt: (fx: number, fy: number) => {
+          const r = this.renderer.domElement.getBoundingClientRect();
+          this.onPointerMove(new PointerEvent('pointermove', { clientX: r.left + r.width * fx, clientY: r.top + r.height * fy }));
+        },
+        fire: (on: boolean) => {
+          this.controls.mouseDown = on;
+        },
+        /** Visible meshes per top-level scene object (find draw-call hogs). */
+        sceneStats: () => {
+          const out: Record<string, number> = {};
+          const count = (o: THREE.Object3D) => {
+            let n = 0;
+            o.traverseVisible((x) => {
+              if ((x as THREE.Mesh).isMesh || (x as THREE.Sprite).isSprite) n++;
+            });
+            return n;
+          };
+          out.map = this.map ? count(this.map.root) : 0;
+          out.effects = count(this.effects.root);
+          out.self = this.self ? count(this.self.root) : 0;
+          out.players = [...this.players.values()].reduce((n, m) => n + count(m.root), 0);
+          out.items = [...this.items.values()].reduce((n, m) => n + count(m.root), 0);
+          out.itemCount = this.items.size;
+          out.crates = [...this.crates.values()].reduce((n, m) => n + count(m.root), 0);
+          out.crateCount = this.crates.size;
+          out.total = count(this.scene);
+          return out;
+        },
       };
     }
   }
@@ -198,8 +278,9 @@ export class GameRenderer {
   private readonly onPointerMove = (e: PointerEvent): void => {
     const r = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this.cursorPx.set(e.clientX - r.left, e.clientY - r.top);
     this.hasPointer = true;
-    this.crosshair.style.transform = `translate3d(${e.clientX - r.left}px, ${e.clientY - r.top}px, 0)`;
+    this.crosshair.style.transform = `translate3d(${this.cursorPx.x}px, ${this.cursorPx.y}px, 0)`;
     this.crosshair.classList.add('is-on');
   };
 
@@ -253,6 +334,7 @@ export class GameRenderer {
     const p = PRESETS[level];
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, p.dpr));
     this.bloom.enabled = p.bloom;
+    this.effects.setDensity(p.particles);
     if (this.sun.shadow.mapSize.x !== p.shadow) {
       this.sun.shadow.mapSize.set(p.shadow, p.shadow);
       this.sun.shadow.map?.dispose();
@@ -309,10 +391,12 @@ export class GameRenderer {
     fadeUniforms.uFadeCenter.value.set(c.renderX, 0, c.renderY);
 
     this.syncSelf(dt, time);
+    // Events first: a kill must claim the victim's model before syncPlayers disposes it.
+    this.drainFx();
     this.syncPlayers(dt, time);
+    this.updateDying(dt);
     this.syncItems(time);
     this.syncCrates(dt, time);
-    this.drainFx();
     this.effects.update(c, dt, time);
     this.map?.setVaultActive(c.global?.highValueActive ?? false, time);
     this.updateZoneLabels();
@@ -320,7 +404,8 @@ export class GameRenderer {
     this.updateCamera(dt);
     this.updateCrosshair(dt);
     this.labels.updateDamage(this.camera);
-    this.muzzleLight.intensity *= Math.exp(-dt * 28);
+    this.debug.update(c, this.self, this.camera, this.aim);
+    this.muzzleLight.intensity *= Math.exp(-dt * 30);
     const me = c.self;
     const hurt = me && c.status === 'playing' && me.hp > 0 ? Math.max(0, Math.min(1, (40 - me.hp) / 30)) : 0;
     this.grade.setState(hurt, me?.extraction ? 1 : 0, dt);
@@ -348,17 +433,44 @@ export class GameRenderer {
     }
     const alive = s.status === 'ALIVE' || s.status === 'EXTRACTING';
     this.self.root.visible = alive && c.status === 'playing';
-    const weapon = s.weapons[s.activeSlot];
-    this.self.setWeapon(weaponIndex(weapon?.weaponId));
+    this.self.setWeapon(weaponIndex(c.activeWeapon?.weaponId));
+    const reload = c.reloadView();
     const flags =
       (s.bountyCents > 0 ? PLAYER_FLAGS.BOUNTY : 0) |
       (s.status === 'EXTRACTING' ? PLAYER_FLAGS.EXTRACTING : 0) |
+      (reload ? PLAYER_FLAGS.RELOADING : 0) |
       (isTierAtLeast(s.bagValue, THREAT_CONFIG.kingpinReveal.minTier) ? PLAYER_FLAGS.KINGPIN : 0);
-    this.self.update(c.renderX, c.renderY, this.aim, flags, dt, time);
+    this.self.update(c.renderX, c.renderY, this.aim, flags, dt, time, reload ? Math.min(1, reload.progress) : null);
+    this.updateReloadSounds();
 
     if (this.self.root.visible) {
       if (c.predicted.dashTime > 0) this.effects.trail(c.renderX, c.renderY, this.self.skin.visor);
       this.maybeDust(-1, c.renderX, c.renderY, this.self.speed);
+    }
+  }
+
+  /** Magazine reloads: mag-out at the start, mag-in mid-way, charge near the end. */
+  private updateReloadSounds(): void {
+    const c = this.client;
+    const view = c.reloadView();
+    const def = c.activeDef;
+    if (!view || !def) {
+      this.reloadPhase = 0;
+      return;
+    }
+    if (view.key !== this.reloadKey) {
+      this.reloadKey = view.key;
+      this.reloadPhase = 1;
+      sound.weaponReload(def.audio.reload, 'start');
+    }
+    if (def.reloadStyle === 'SHELL') return;
+    if (this.reloadPhase < 2 && view.progress >= 0.5) {
+      this.reloadPhase = 2;
+      sound.weaponReload(def.audio.reload, 'mid');
+    }
+    if (this.reloadPhase < 3 && view.progress >= 0.8) {
+      this.reloadPhase = 3;
+      sound.weaponReload(def.audio.reload, 'end');
     }
   }
 
@@ -373,7 +485,9 @@ export class GameRenderer {
   private syncPlayers(dt: number, time: number): void {
     const c = this.client;
     this.seenIds.clear();
+    for (const id of this.deadIds) if (!c.players.has(id)) this.deadIds.delete(id);
     for (const p of c.players.values()) {
+      if (this.deadIds.has(p.id)) continue;
       this.seenIds.add(p.id);
       let model = this.players.get(p.id);
       if (!model) {
@@ -382,8 +496,11 @@ export class GameRenderer {
         this.scene.add(model.root);
       }
       const prevHp = this.lastHp.get(p.id);
+      const prevArmor = this.lastArmor.get(p.id);
       if (prevHp !== undefined && p.hp < prevHp) model.hit();
+      else if (prevArmor !== undefined && p.armor < prevArmor) model.hit();
       this.lastHp.set(p.id, p.hp);
+      this.lastArmor.set(p.id, p.armor);
       model.setWeapon(p.weapon);
       model.update(p.x, p.y, p.rot, p.flags, dt, time);
       this.maybeDust(p.id, p.x, p.y, model.speed);
@@ -402,12 +519,27 @@ export class GameRenderer {
     for (const [id, model] of this.players) {
       if (!this.seenIds.has(id)) {
         model.dispose();
-        this.players.delete(id);
-        this.lastHp.delete(id);
-        this.lastDustAt.delete(id);
+        this.forgetPlayer(id);
       }
     }
     this.labels.retainPlayers(this.seenIds);
+  }
+
+  private forgetPlayer(id: number): void {
+    this.players.delete(id);
+    this.lastHp.delete(id);
+    this.lastArmor.delete(id);
+    this.lastDustAt.delete(id);
+  }
+
+  private updateDying(dt: number): void {
+    for (let i = this.dying.length - 1; i >= 0; i--) {
+      const m = this.dying[i]!;
+      if (!m.updateDeath(dt)) {
+        m.dispose();
+        this.dying.splice(i, 1);
+      }
+    }
   }
 
   private syncItems(time: number): void {
@@ -418,15 +550,20 @@ export class GameRenderer {
         this.items.delete(id);
       }
     }
+    const motes = time >= this.nextMoteAt;
+    if (motes) this.nextMoteAt = time + 320;
     for (const it of c.items.values()) {
       let m = this.items.get(it.id);
       if (!m) {
-        m = new GroundItemModel(it.itemId, it.x, it.y);
+        // Items appearing mid-game (drops, spills) pop out; the initial world is already settled.
+        m = new GroundItemModel(it.itemId, it.x, it.y, this.itemsSynced);
         this.items.set(it.id, m);
         this.scene.add(m.root);
       }
       m.update(time);
+      if (motes && m.rank >= 3 && Math.abs(it.x - this.camTarget.x) < 900 && Math.abs(it.y - this.camTarget.z) < 600) this.effects.mote(it.x, it.y, m.color);
     }
+    if (c.predictionReady) this.itemsSynced = true;
   }
 
   private syncCrates(dt: number, time: number): void {
@@ -444,23 +581,70 @@ export class GameRenderer {
         this.crates.set(cr.id, m);
         this.scene.add(m.root);
       }
-      m.setState(cr.opened, cr.locked);
+      if (m.setState(cr.opened, cr.locked)) {
+        const big = cr.type === 'LEGENDARY' || cr.type === 'SUPPLY_DROP';
+        this.effects.crateOpen(cr.x, cr.y, m.glowColor, big);
+        if (Math.hypot(cr.x - c.renderX, cr.y - c.renderY) < 500) sound.crateOpen(big);
+      }
       m.update(dt, time);
     }
   }
 
-  /** A remote player's shot: recoil on their model + positional sound (pellets deduped). */
-  private onRemoteShot(ownerId: number, wIndex: number, x: number, y: number): void {
-    this.players.get(ownerId)?.fire();
-    const now = performance.now();
-    if (now - (this.shotSoundAt.get(ownerId) ?? 0) < 40) return;
-    this.shotSoundAt.set(ownerId, now);
-    const def = weaponFromIndex(wIndex);
-    if (!def) return;
+  /** A remote player's shot: kick + flash on their model, smoke, casing, positional sound. */
+  private onRemoteShot(ownerId: number, def: WeaponDefinition, x: number, y: number, angle: number): void {
+    const model = this.players.get(ownerId);
+    if (model) {
+      model.fire();
+      const m = model.muzzleWorld(this.v1);
+      this.effects.muzzle(m.x, m.y, m.z, angle, def);
+      const e = model.ejectWorld(this.v2);
+      this.effects.casings.eject(e.x, e.y, e.z, angle, def.visual.casing);
+    }
     const c = this.client;
     const dx = x - c.renderX;
     const dy = y - c.renderY;
-    sound.shot(def.id, Math.hypot(dx, dy), dx / 700);
+    sound.weaponFire(def.id, Math.hypot(dx, dy), Math.max(-1, Math.min(1, dx / 700)));
+  }
+
+  private onImpact(surface: ImpactSurface, x: number, y: number): void {
+    const now = performance.now();
+    if (now - this.lastImpactSoundAt < 45) return;
+    const c = this.client;
+    const d = Math.hypot(x - c.renderX, y - c.renderY);
+    if (d > 650) return;
+    this.lastImpactSoundAt = now;
+    sound.impact(surface, d, Math.max(-1, Math.min(1, (x - c.renderX) / 600)));
+  }
+
+  private onWhiz(x: number): void {
+    const now = performance.now();
+    if (now - this.lastWhizAt < 110) return;
+    this.lastWhizAt = now;
+    sound.whiz(Math.max(-1, Math.min(1, (x - this.client.renderX) / 80)));
+  }
+
+  /** Our own round (predicted instantly). */
+  private onLocalShot(def: WeaponDefinition, angle: number, streak: number): void {
+    const model = this.self;
+    const v = def.visual;
+    if (model) {
+      model.fire();
+      const m = model.muzzleWorld(this.v1);
+      this.effects.muzzle(m.x, m.y, m.z, angle, def);
+      const light = MUZZLE_LIGHT[v.muzzleFlash];
+      this.muzzleLight.color.setHex(light.color);
+      this.muzzleLight.intensity = light.intensity;
+      this.muzzleLight.position.set(m.x, m.y + 8, m.z);
+      const e = model.ejectWorld(this.v2);
+      this.effects.casings.eject(e.x, e.y, e.z, angle, v.casing);
+    }
+    // Camera recoil: a short push against the shot direction, sprung back.
+    this.camKick.x -= Math.cos(angle) * v.cameraKick;
+    this.camKick.y -= Math.sin(angle) * v.cameraKick;
+    if (this.camKick.length() > KICK_MAX) this.camKick.setLength(KICK_MAX);
+    this.shake = Math.min(1, Math.max(this.shake, v.screenShake + (streak > 3 ? v.vibration * 0.12 : 0)));
+    this.chPunch = Math.min(1, this.chPunch + 0.35 + def.recoil * 0.5);
+    sound.weaponFire(def.id, 0, 0, streak);
   }
 
   private drainFx(): void {
@@ -468,43 +652,45 @@ export class GameRenderer {
     while (c.fx.length > 0) {
       const ev = c.fx.shift()!;
       switch (ev.e) {
-        case 'localShot': {
-          this.self?.fire();
-          this.shake = Math.max(this.shake, ev.weaponId === 'shotgun' ? 0.45 : 0.14);
-          this.spread = Math.min(1, this.spread + (ev.weaponId === 'shotgun' ? 0.8 : 0.35));
-          sound.shot(ev.weaponId);
-          this.muzzleLight.intensity = 9000;
-          this.muzzleLight.position.set(c.renderX + Math.cos(this.aim) * 50, 34, c.renderY + Math.sin(this.aim) * 50);
+        case 'localShot':
+          this.onLocalShot(WEAPONS[ev.weaponId], ev.angle, ev.streak);
           break;
-        }
         case 'dryFire':
-          sound.dryFire();
+          sound.weaponEmpty();
+          this.flashNote();
+          break;
+        case 'equip':
+          sound.weaponEquip(WEAPONS[ev.weaponId].audio.equip);
+          break;
+        case 'reloadStart':
+        case 'reloadDone':
+          if (ev.e === 'reloadDone' && WEAPONS[ev.weaponId].reloadStyle === 'SHELL') sound.weaponReload('shell', 'end');
+          break;
+        case 'shellIn':
+          sound.weaponShellIn();
+          this.self?.shellIn();
+          break;
+        case 'pierce':
+          this.effects.playerHit(ev.x, ev.y, ev.dx, ev.dy, false);
           break;
         case 'dash':
           sound.dash();
           break;
         case 'dmg':
-          this.labels.showDamage(ev.x, ev.y, ev.amount, ev.armor);
-          this.hitmarker('hit');
-          sound.hitmarker();
+          this.labels.showDamage(ev.targetId, ev.x, ev.y, ev.amount, ev.armor);
+          this.hitmarker(ev.killed ? 'kill' : ev.armor ? 'armor' : 'hit');
+          sound.hitmarker(ev.armor);
           break;
         case 'hurt':
-          this.shake = 1;
+          this.shake = Math.min(1, this.shake + 0.35);
           this.self?.hit();
-          sound.hurt();
+          sound.hurt(ev.armor ?? false);
           break;
-        case 'kill': {
-          const victim = c.players.get(ev.victimId);
-          if (victim) this.effects.deathBurst(victim.x, victim.y);
-          else if (ev.victimId === c.playerId) this.effects.deathBurst(c.renderX, c.renderY);
-          if (ev.killerId !== null && ev.killerId === c.playerId) {
-            this.hitmarker('kill');
-            sound.kill();
-          }
+        case 'kill':
+          this.onKill(ev.victimId, ev.killerId);
           break;
-        }
         case 'loot':
-          sound.pickup(ev.rarity as Rarity);
+          this.onLoot(ev.itemId, ev.rarity);
           break;
         case 'announce':
           sound.announce(ev.kind);
@@ -521,6 +707,42 @@ export class GameRenderer {
     }
   }
 
+  private onKill(victimId: number, killerId: number | null): void {
+    const c = this.client;
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const victim = this.players.get(victimId);
+    if (victim) {
+      this.effects.deathBurst(victim.root.position.x, victim.root.position.z);
+      victim.die(side);
+      this.dying.push(victim);
+      this.forgetPlayer(victimId);
+      this.deadIds.add(victimId);
+    } else if (victimId === c.playerId && this.self) {
+      // Our own body stays behind as a corpse; the live model hides.
+      const corpse = new CharacterModel(this.self.skin, false);
+      corpse.setWeapon(weaponIndex(c.activeWeapon?.weaponId), false);
+      corpse.update(c.renderX, c.renderY, this.aim, 0, 0, 0);
+      this.scene.add(corpse.root);
+      corpse.die(side);
+      this.dying.push(corpse);
+      this.effects.deathBurst(c.renderX, c.renderY);
+    }
+    if (killerId !== null && killerId === c.playerId) sound.kill();
+  }
+
+  private onLoot(itemId: string, rarity: Rarity): void {
+    const c = this.client;
+    const def = getItemDef(itemId);
+    const cfg = RARITY_CONFIG[rarity];
+    sound.pickup(rarity);
+    if (def.type === 'WEAPON') sound.weaponPickup();
+    if (cfg.rank >= RARITY_CONFIG.LEGENDARY.rank) {
+      this.effects.legendaryBurst(c.renderX, c.renderY, cfg.colorHex);
+      this.grade.flash(cfg.colorHex, 0.55);
+      this.shake = Math.min(1, this.shake + 0.25);
+    } else if (cfg.rank >= 1) this.effects.lootBurst(c.renderX, c.renderY, cfg.colorHex, cfg.rank);
+  }
+
   /** Reload / extraction ticks / heartbeat / extracted jingle from state transitions. */
   private updateFeel(now: number): void {
     const c = this.client;
@@ -530,8 +752,6 @@ export class GameRenderer {
       this.lastStatus = c.status;
     }
     if (!s || c.status !== 'playing') return;
-    if (s.reloadRemainingMs > 0 && this.lastReloadMs === 0) sound.reload();
-    this.lastReloadMs = s.reloadRemainingMs;
     const sec = s.extraction ? Math.ceil(s.extraction.remainingMs / 1000) : -1;
     if (sec !== this.lastExtractSecond && sec > 0) sound.tick(sec <= 3);
     this.lastExtractSecond = sec;
@@ -541,21 +761,56 @@ export class GameRenderer {
     }
   }
 
-  private hitmarker(kind: 'hit' | 'kill'): void {
+  private hitmarker(kind: 'hit' | 'armor' | 'kill'): void {
     const el = this.crosshair;
-    el.classList.remove('is-hit', 'is-kill');
+    el.classList.remove('is-hit', 'is-armor', 'is-kill');
     void el.offsetWidth; // restart the CSS animation
-    el.classList.add(kind === 'kill' ? 'is-kill' : 'is-hit');
+    el.classList.add(kind === 'kill' ? 'is-kill' : kind === 'armor' ? 'is-armor' : 'is-hit');
   }
 
+  private flashNote(): void {
+    this.chNote.classList.remove('is-flash');
+    void this.chNote.offsetWidth;
+    this.chNote.classList.add('is-flash');
+  }
+
+  /**
+   * The crosshair draws the real spread cone at the cursor's distance: the
+   * gap is where a round at the edge of the cone would cross the cursor.
+   */
   private updateCrosshair(dt: number): void {
-    const s = this.client.self;
-    const w = s?.weapons[s.activeSlot];
-    const base = w ? WEAPONS[w.weaponId].spread * 120 : 4;
-    this.spread = Math.max(0, this.spread - dt * 3.5);
-    const gap = 5 + base + this.spread * 14;
-    this.crosshair.style.setProperty('--gap', `${gap.toFixed(1)}px`);
-    this.crosshair.classList.toggle('is-hidden', this.client.status !== 'playing' || this.controls.blocked);
+    const c = this.client;
+    const el = this.crosshair;
+    el.classList.toggle('is-hidden', c.status !== 'playing' || this.controls.blocked);
+    const def = c.activeDef;
+    // Player on screen.
+    this.v1.set(c.renderX, GUN_HEIGHT, c.renderY).project(this.camera);
+    const px = ((this.v1.x + 1) / 2) * this.width;
+    const py = ((1 - this.v1.y) / 2) * this.height;
+    const dist = Math.max(40, Math.hypot(this.cursorPx.x - px, this.cursorPx.y - py));
+    const target = def ? Math.max(3, Math.min(140, Math.tan(c.currentSpread()) * dist)) : 6;
+    // Opens instantly, closes smoothly.
+    this.chGap = target > this.chGap ? target : this.chGap + (target - this.chGap) * Math.min(1, dt * 14);
+    this.chPunch = Math.max(0, this.chPunch - dt * 6);
+    el.style.setProperty('--gap', `${(this.chGap + this.chPunch * 5).toFixed(1)}px`);
+    el.style.setProperty('--punch', (1 + this.chPunch * 0.12).toFixed(3));
+    el.classList.toggle('is-pellets', !!def && def.pelletCount > 1);
+
+    const reload = c.reloadView();
+    el.classList.toggle('is-reload', !!reload);
+    if (reload) this.chRing.setAttribute('stroke-dashoffset', (RELOAD_CIRC * (1 - Math.min(1, reload.progress))).toFixed(2));
+
+    const mag = c.displayMag();
+    const reserve = def && c.self ? c.self.ammo[def.ammoType] : 0;
+    const low = !!def && mag !== null && mag > 0 && mag <= Math.ceil(def.magazineSize * 0.25);
+    el.classList.toggle('is-low', low);
+    let note = '';
+    if (def && mag === 0 && !reload) note = reserve > 0 ? 'RELOAD' : 'NO AMMO';
+    else if (c.currentWeaponPhase() === 'SWITCHING') note = '';
+    if (note !== this.chNoteText) {
+      this.chNoteText = note;
+      this.chNote.textContent = note;
+    }
   }
 
   private updateZoneLabels(): void {
@@ -589,10 +844,17 @@ export class GameRenderer {
       this.camTarget.set(c.renderX + this.look.x, 0, c.renderY + this.look.y);
     }
 
-    this.shake = Math.max(0, this.shake - dt * 4);
-    const amp = this.shake * this.shake * 16;
-    const sx = (Math.random() - 0.5) * amp;
-    const sz = (Math.random() - 0.5) * amp;
+    // Recoil spring (critically damped): never moves the aim point, only the view.
+    const step = Math.min(dt, 0.05);
+    this.camKickVel.x += (-KICK_K * this.camKick.x - KICK_C * this.camKickVel.x) * step;
+    this.camKickVel.y += (-KICK_K * this.camKick.y - KICK_C * this.camKickVel.y) * step;
+    this.camKick.x += this.camKickVel.x * step;
+    this.camKick.y += this.camKickVel.y * step;
+
+    this.shake = Math.max(0, this.shake - dt * 3.2);
+    const amp = this.shake * this.shake * 11;
+    const sx = (Math.random() - 0.5) * amp + this.camKick.x;
+    const sz = (Math.random() - 0.5) * amp + this.camKick.y;
     this.camera.position.set(this.camTarget.x + sx, Math.cos(TILT) * distance, this.camTarget.z + Math.sin(TILT) * distance + sz);
     this.camera.lookAt(this.camTarget.x + sx, 0, this.camTarget.z + sz);
 
@@ -615,7 +877,9 @@ export class GameRenderer {
     window.removeEventListener('pointerup', this.onPointerUp);
     this.effects.dispose();
     this.labels.dispose();
+    this.debug.dispose();
     for (const m of this.players.values()) m.dispose();
+    for (const m of this.dying) m.dispose();
     this.self?.dispose();
     this.composer.dispose();
     this.renderer.dispose();

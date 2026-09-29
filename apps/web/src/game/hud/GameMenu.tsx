@@ -51,7 +51,7 @@ export function SettingsPanel() {
             step={0.05}
             value={s.volume}
             onChange={(e) => settings.patch({ volume: Number(e.target.value) })}
-            onPointerUp={() => sound.shot('basic_pistol')}
+            onPointerUp={() => sound.weaponFire('basic_pistol')}
           />
           <b>{Math.round(s.volume * 100)}%</b>
         </label>

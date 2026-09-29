@@ -6,7 +6,7 @@ export type Rarity = (typeof RARITIES)[number];
 export const ITEM_TYPES = ['WEAPON', 'AMMO', 'CONSUMABLE', 'VALUABLE', 'COSMETIC'] as const;
 export type ItemType = (typeof ITEM_TYPES)[number];
 
-export const AMMO_TYPES = ['light', 'rifle', 'shell'] as const;
+export const AMMO_TYPES = ['light', 'rifle', 'shell', 'heavy'] as const;
 export type AmmoType = (typeof AMMO_TYPES)[number];
 
 export type ItemId = string;

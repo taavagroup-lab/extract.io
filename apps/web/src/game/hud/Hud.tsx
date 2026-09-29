@@ -1,4 +1,6 @@
-import { MATCH_CONFIG, PHASE_LABELS, WEAPONS, getItemDef } from '@extract/game-config';
+import { MATCH_CONFIG, PHASE_LABELS, RARITY_CONFIG, WEAPONS, getItemDef, isWeaponId } from '@extract/game-config';
+import type { WeaponDefinition } from '@extract/game-types';
+import type { CSSProperties } from 'react';
 import { formatClock } from '@extract/shared';
 import { ItemIcon } from '@extract/ui';
 import { Usdc } from '../../components/Brand';
@@ -48,44 +50,84 @@ function Bar({ value, max, className, label }: { value: number; max: number; cla
   );
 }
 
+const MODE_LABEL = (def: WeaponDefinition): string =>
+  def.fireMode === 'BURST' ? `BURST ×${def.burstCount}` : def.pelletCount > 1 && def.fireMode === 'SEMI' ? 'PUMP' : def.fireMode;
+
+/** Weapon HUD: silhouette, name, fire mode, magazine / reserve, slots, reload. */
 function WeaponPanel({ hud }: { hud: HudState }) {
   const s = hud.self;
   if (!s) return null;
-  const active = s.weapons[s.activeSlot];
+  const slot = hud.activeSlot;
+  const active = s.weapons[slot];
   const def = active ? WEAPONS[active.weaponId] : null;
+  const item = active ? getItemDef(active.itemId) : null;
   const reserve = def ? s.ammo[def.ammoType] : 0;
   const mag = hud.mag ?? active?.mag ?? 0;
-  const lowAmmo = def ? mag <= Math.ceil(def.magazineSize * 0.25) : false;
+  const lowAmmo = def ? mag > 0 && mag <= Math.ceil(def.magazineSize * 0.25) : false;
+  const pips = def ? Math.min(def.magazineSize, 30) : 0;
+  const filled = def ? Math.round((mag / def.magazineSize) * pips) : 0;
+  const rarity = item ? RARITY_CONFIG[item.rarity] : null;
+  const style = { '--rarity': rarity?.color ?? 'var(--hud-line)' } as CSSProperties;
+  const reload = hud.reload;
   return (
-    <div className="hud-weapon">
-      <div className="hud-weapon__main">
-        {active && <ItemIcon type="WEAPON" rarity={getItemDef(active.itemId).rarity} icon={getItemDef(active.itemId).icon} size={34} />}
-        <span className="hud-weapon__name">{def?.name ?? 'Unarmed'}</span>
-        <span className="hud-weapon__ammo">
-          <b className={mag === 0 ? 'is-empty' : lowAmmo ? 'is-low' : ''}>{mag}</b>
-          <small> / {reserve}</small>
-        </span>
+    <div className={`hud-weapon ${hud.weaponPhase === 'SWITCHING' ? 'is-switching' : ''}`} style={style}>
+      <div key={active?.uid ?? 'none'} className="hud-weapon__main">
+        {item && <ItemIcon type="WEAPON" rarity={item.rarity} icon={item.icon} size={42} />}
+        <div className="hud-weapon__id">
+          <span className="hud-weapon__name">{def?.name ?? 'Unarmed'}</span>
+          {def && (
+            <span className="hud-weapon__meta">
+              {def.displayName} · <b>{MODE_LABEL(def)}</b>
+            </span>
+          )}
+        </div>
+        {def && (
+          <span className="hud-weapon__ammo">
+            <b key={mag === 0 ? 'empty' : lowAmmo ? `low-${mag}` : 'ok'} className={mag === 0 ? 'is-empty' : lowAmmo ? 'is-low' : ''}>
+              {mag}
+            </b>
+            <small> / {reserve}</small>
+          </span>
+        )}
       </div>
       {def && (
-        <div className="hud-mag" aria-hidden="true">
-          {Array.from({ length: Math.min(def.magazineSize, 30) }, (_, i) => (
-            <i key={i} className={i < Math.round((mag / def.magazineSize) * Math.min(def.magazineSize, 30)) ? 'is-full' : ''} />
-          ))}
+        <div className={`hud-mag ${def.magazineSize > 30 ? 'is-belt' : ''}`} aria-hidden="true">
+          {def.magazineSize > 30 ? (
+            <i className="is-full" style={{ width: `${(mag / def.magazineSize) * 100}%` }} />
+          ) : (
+            Array.from({ length: pips }, (_, i) => <i key={i} className={i < filled ? 'is-full' : ''} />)
+          )}
         </div>
       )}
       <div className="hud-weapon__slots">
-        {s.weapons.map((w, i) => (
-          <span key={i} className={`hud-slot ${i === s.activeSlot ? 'is-active' : ''} ${w ? '' : 'is-empty'}`}>
-            <kbd>{i + 1}</kbd>
-            {w ? WEAPONS[w.weaponId].name : '—'}
-          </span>
-        ))}
+        {s.weapons.map((w, i) => {
+          const d = w ? getItemDef(w.itemId) : null;
+          return (
+            <span key={i} className={`hud-slot ${i === slot ? 'is-active' : ''} ${w ? '' : 'is-empty'}`} style={d ? ({ '--rarity': RARITY_CONFIG[d.rarity].color } as CSSProperties) : undefined}>
+              <kbd>{i + 1}</kbd>
+              {w && d ? (
+                <>
+                  <ItemIcon type="WEAPON" rarity={d.rarity} icon={d.icon} size={18} />
+                  <em>{WEAPONS[w.weaponId].name}</em>
+                </>
+              ) : (
+                '—'
+              )}
+            </span>
+          );
+        })}
       </div>
-      {s.reloadRemainingMs > 0 && (
+      {reload && (
         <div className="hud-progress">
           RELOADING
-          <i style={{ width: `${100 - (s.reloadRemainingMs / Math.max(1, s.reloadTotalMs)) * 100}%` }} />
+          <i
+            key={reload.key}
+            style={{ '--from': `${Math.min(100, reload.progress * 100)}%`, animationDuration: `${Math.max(1, reload.remainingMs)}ms` } as CSSProperties}
+          />
         </div>
+      )}
+      {!reload && def && mag === 0 && (
+        <div className="hud-progress hud-progress--empty">{reserve > 0 ? 'EMPTY · PRESS R' : `NO ${def.ammoType.toUpperCase()} AMMO`}</div>
       )}
       {s.useItem && (
         <div className="hud-progress hud-progress--use">
@@ -93,6 +135,66 @@ function WeaponPanel({ hud }: { hud: HudState }) {
           <i style={{ width: `${100 - (s.useItem.remainingMs / s.useItem.totalMs) * 100}%` }} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** [E] card: what the nearest pickup is (rarity, weapon stats / ammo) or which crate opens. */
+function InteractCard({ hud }: { hud: HudState }) {
+  const h = hud.interactHint;
+  if (!h) return null;
+  if (h.kind === 'crate') {
+    return (
+      <div className={`hud-interact ${h.locked ? 'is-locked' : ''}`}>
+        <kbd>E</kbd>
+        <span>{h.locked ? `${h.label} · locked until Combat Phase` : `Open ${h.label}`}</span>
+      </div>
+    );
+  }
+  const def = getItemDef(h.itemId);
+  const cfg = RARITY_CONFIG[def.rarity];
+  const weapon = def.metadata.weaponId && isWeaponId(def.metadata.weaponId) ? WEAPONS[def.metadata.weaponId] : null;
+  const style = { '--rarity': cfg.color } as CSSProperties;
+  return (
+    <div key={h.id} className={`hud-interact hud-interact--item rarity-${def.rarity.toLowerCase()}`} style={style}>
+      <kbd>E</kbd>
+      <ItemIcon type={def.type} rarity={def.rarity} icon={def.icon} size={34} />
+      <div className="hud-interact__text">
+        <span className="hud-interact__rarity">{cfg.label}</span>
+        <strong>
+          {def.name}
+          {h.qty > 1 ? ` ×${h.qty}` : ''}
+        </strong>
+        {weapon ? (
+          <small>
+            {weapon.displayName} · {MODE_LABEL(weapon)} · AMMO {h.mag ?? weapon.magazineSize}/{weapon.magazineSize}
+            {hud.self ? ` · ${hud.self.ammo[weapon.ammoType]} ${weapon.ammoType}` : ''}
+          </small>
+        ) : def.estimatedValue > 0 ? (
+          <small>
+            <Usdc cents={def.estimatedValue * h.qty} />
+          </small>
+        ) : (
+          <small>{def.metadata.description ?? ''}</small>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Small, clean moment for LEGENDARY+ finds (not a casino popup). */
+function LegendaryMoment({ hud }: { hud: HudState }) {
+  const l = hud.legendary;
+  if (!l) return null;
+  const def = getItemDef(l.itemId);
+  const cfg = RARITY_CONFIG[def.rarity];
+  return (
+    <div key={l.id} className="hud-legendary" style={{ '--rarity': cfg.color } as CSSProperties} role="status">
+      <span>{cfg.label.toUpperCase()}</span>
+      <strong>{def.name.toUpperCase()}</strong>
+      <em>
+        Estimated value <Usdc cents={l.value || def.estimatedValue} />
+      </em>
     </div>
   );
 }
@@ -134,7 +236,7 @@ export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
       <div key={hud.hurtAt} className={`hud-vignette ${hud.hurtAt > 0 ? 'is-hit' : ''} ${lowHp ? 'is-low' : ''}`} />
 
       {hud.hurts.map((h) => (
-        <div key={h.id} className="hud-hurt-dir" style={{ transform: `translate(-50%, -50%) rotate(${h.angle}rad)` }}>
+        <div key={h.id} className={`hud-hurt-dir ${h.armor ? 'is-armor' : ''}`} style={{ transform: `translate(-50%, -50%) rotate(${h.angle}rad)` }}>
           <i />
         </div>
       ))}
@@ -192,11 +294,8 @@ export function Hud({ client, hud }: { client: GameClient; hud: HudState }) {
       <ExtractionProgress hud={hud} />
       <ExtractionInterrupted hud={hud} />
 
-      {hud.interactHint && (
-        <div className="hud-interact">
-          <kbd>E</kbd> {hud.interactHint}
-        </div>
-      )}
+      <InteractCard hud={hud} />
+      <LegendaryMoment hud={hud} />
 
       <LootToasts hud={hud} />
 

@@ -1,4 +1,5 @@
-import type { ItemDefinition, ItemId } from '@extract/game-types';
+import type { ItemDefinition, ItemId, WeaponId } from '@extract/game-types';
+import { WEAPONS } from './weapons';
 import { SEASON_1 } from './season';
 
 type ItemInput = Omit<ItemDefinition, 'seasonId' | 'maxSupply' | 'metadata'> &
@@ -11,68 +12,43 @@ const item = (def: ItemInput): ItemDefinition => ({
   ...def,
 });
 
+/** Weapon item: identity and rarity come from the weapon definition. */
+function weaponItem(id: WeaponId, o: { value: number; icon: string; dropWeight: number; starter?: boolean }): ItemDefinition {
+  const w = WEAPONS[id];
+  return item({
+    id,
+    name: w.name,
+    type: 'WEAPON',
+    rarity: w.rarity,
+    stackable: false,
+    maxStack: 1,
+    estimatedValue: o.value,
+    icon: o.icon,
+    persistable: !o.starter,
+    dropWeight: o.dropWeight,
+    dropQuantity: [1, 1],
+    metadata: { weaponId: id, description: w.description, ...(o.starter ? { starter: true } : {}) },
+  });
+}
+
 /**
  * Item catalog. Values are integer cents of TEST USDC.
  * This file is the source of truth; `pnpm db:seed` mirrors it into ItemDefinition.
  */
 export const ITEM_DEFINITIONS: readonly ItemDefinition[] = [
-  // --- Weapons -------------------------------------------------------------
-  item({
-    id: 'basic_pistol',
-    name: 'Basic Pistol',
-    type: 'WEAPON',
-    rarity: 'COMMON',
-    stackable: false,
-    maxStack: 1,
-    estimatedValue: 0,
-    icon: 'pistol',
-    persistable: false,
-    dropWeight: 0,
-    dropQuantity: [1, 1],
-    metadata: { weaponId: 'basic_pistol', starter: true, description: 'Weak starter sidearm.' },
-  }),
-  item({
-    id: 'smg',
-    name: 'SMG',
-    type: 'WEAPON',
-    rarity: 'RARE',
-    stackable: false,
-    maxStack: 1,
-    estimatedValue: 250,
-    icon: 'smg',
-    persistable: true,
-    dropWeight: 5,
-    dropQuantity: [1, 1],
-    metadata: { weaponId: 'smg', description: 'Very high fire rate, low damage.' },
-  }),
-  item({
-    id: 'shotgun',
-    name: 'Shotgun',
-    type: 'WEAPON',
-    rarity: 'RARE',
-    stackable: false,
-    maxStack: 1,
-    estimatedValue: 300,
-    icon: 'shotgun',
-    persistable: true,
-    dropWeight: 4,
-    dropQuantity: [1, 1],
-    metadata: { weaponId: 'shotgun', description: 'Devastating at close range.' },
-  }),
-  item({
-    id: 'assault_rifle',
-    name: 'Assault Rifle',
-    type: 'WEAPON',
-    rarity: 'EPIC',
-    stackable: false,
-    maxStack: 1,
-    estimatedValue: 600,
-    icon: 'rifle',
-    persistable: true,
-    dropWeight: 6,
-    dropQuantity: [1, 1],
-    metadata: { weaponId: 'assault_rifle', description: 'Reliable mid-range rifle.' },
-  }),
+  // --- Weapons (stats live in weapons.ts; name / rarity / description come from there) ---
+  weaponItem('basic_pistol', { value: 0, icon: 'pistol', dropWeight: 0, starter: true }),
+  weaponItem('heavy_pistol', { value: 220, icon: 'pistol_heavy', dropWeight: 2.5 }),
+  weaponItem('smg', { value: 250, icon: 'smg', dropWeight: 5 }),
+  weaponItem('suppressed_smg', { value: 380, icon: 'smg_sd', dropWeight: 2.5 }),
+  weaponItem('shotgun', { value: 300, icon: 'shotgun', dropWeight: 4 }),
+  weaponItem('assault_rifle', { value: 600, icon: 'rifle', dropWeight: 3 }),
+  weaponItem('burst_rifle', { value: 650, icon: 'rifle_burst', dropWeight: 1.5 }),
+  weaponItem('battle_rifle', { value: 700, icon: 'rifle_battle', dropWeight: 1.5 }),
+  weaponItem('auto_shotgun', { value: 560, icon: 'shotgun_auto', dropWeight: 1.5 }),
+  weaponItem('marksman_rifle', { value: 850, icon: 'sniper', dropWeight: 1.2 }),
+  weaponItem('lmg', { value: 780, icon: 'lmg', dropWeight: 1.3 }),
+  weaponItem('void_rifle', { value: 4285, icon: 'void_rifle', dropWeight: 1.2 }),
   // --- Ammo ----------------------------------------------------------------
   item({
     id: 'ammo_light',
@@ -100,7 +76,7 @@ export const ITEM_DEFINITIONS: readonly ItemDefinition[] = [
     persistable: false,
     dropWeight: 4,
     dropQuantity: [15, 30],
-    metadata: { ammoType: 'rifle', description: 'Assault rifle ammunition.' },
+    metadata: { ammoType: 'rifle', description: 'Assault, burst, LMG and void rifle ammunition.' },
   }),
   item({
     id: 'ammo_shell',
@@ -115,6 +91,20 @@ export const ITEM_DEFINITIONS: readonly ItemDefinition[] = [
     dropWeight: 3,
     dropQuantity: [6, 12],
     metadata: { ammoType: 'shell', description: 'Shotgun shells.' },
+  }),
+  item({
+    id: 'ammo_heavy',
+    name: 'Heavy Ammo',
+    type: 'AMMO',
+    rarity: 'COMMON',
+    stackable: true,
+    maxStack: 60,
+    estimatedValue: 0,
+    icon: 'ammo_heavy',
+    persistable: false,
+    dropWeight: 2,
+    dropQuantity: [6, 14],
+    metadata: { ammoType: 'heavy', description: 'Full-power rounds: heavy pistol, battle rifle, sniper.' },
   }),
   // --- Consumables ---------------------------------------------------------
   item({

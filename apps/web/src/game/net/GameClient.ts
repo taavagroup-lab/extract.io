@@ -1,4 +1,4 @@
-import { NETWORK_CONFIG, PLAYER_CONFIG, WEAPONS, getItemDef, weaponIndex } from '@extract/game-config';
+import { NETWORK_CONFIG, PLAYER_CONFIG, RARITY_CONFIG, WEAPONS, reloadDuration, weaponFromIndex, weaponIndex } from '@extract/game-config';
 import {
   INPUT_BUTTONS,
   PLAYER_STATUSES,
@@ -24,9 +24,28 @@ import {
   type SelfState,
   type ServerMessage,
   type SnapshotMessage,
+  type WeaponDefinition,
   type WeaponId,
+  type WeaponInstance,
+  type WeaponPhase,
 } from '@extract/game-types';
-import { CollisionWorld, decodeMessage, encodeMessage, lerp, lerpAngle, segmentCircle, stepMovement, type MoveState } from '@extract/shared';
+import {
+  CollisionWorld,
+  createWeaponRuntime,
+  decodeMessage,
+  encodeMessage,
+  equipWeaponRuntime,
+  lerp,
+  lerpAngle,
+  moveParamsFor,
+  segmentCircle,
+  shotAngles,
+  stepMovement,
+  stepWeapon,
+  weaponPhase,
+  weaponSpread,
+  type MoveState,
+} from '@extract/shared';
 
 export type ClientStatus = 'connecting' | 'lobby' | 'playing' | 'dead' | 'extracted' | 'ended' | 'reconnecting' | 'error';
 
@@ -74,6 +93,8 @@ export interface ClientBullet {
   ghost: boolean;
   /** Obstacle style the shot would stop at (impact VFX), null when it flies to max range. */
   surface: ObstacleStyle | null;
+  /** Bright tracer round (every Nth per weapon config); the others draw a faint streak. */
+  tracer: boolean;
 }
 
 export interface InputSample {
@@ -133,6 +154,28 @@ export interface ExtractInterrupt {
   reason: string;
 }
 
+/** What [E] would do right now (drives the pickup card). */
+export type InteractHint =
+  | { kind: 'item'; id: number; itemId: string; qty: number; mag: number | null }
+  | { kind: 'crate'; id: number; label: string; locked: boolean };
+
+/** Big-find moment for LEGENDARY+ loot (small, centred, a few seconds). */
+export interface LegendaryMoment {
+  id: number;
+  at: number;
+  itemId: string;
+  value: number;
+}
+
+/** Reload as seen by the HUD (server state or local prediction). */
+export interface ReloadView {
+  /** Changes whenever a new reload starts (restarts the progress animation). */
+  key: number;
+  progress: number;
+  remainingMs: number;
+  totalMs: number;
+}
+
 export interface HudState {
   status: ClientStatus;
   error: string | null;
@@ -145,7 +188,7 @@ export interface HudState {
   toasts: LootToast[];
   notices: Notice[];
   extractAlertAt: number;
-  interactHint: string | null;
+  interactHint: InteractHint | null;
   death: DeathSummary | null;
   extracted: ExtractionSummary | null;
   end: MatchEndSummary | null;
@@ -154,7 +197,7 @@ export interface HudState {
   playerName: string;
   hurtAt: number;
   /** Recent hits taken, with direction (for the damage indicator). */
-  hurts: { id: number; at: number; angle: number }[];
+  hurts: { id: number; at: number; angle: number; armor: boolean }[];
   /** Magazine including locally predicted shots (null = no weapon). */
   mag: number | null;
   /** Last KINGPIN announcement (shown for a few seconds). */
@@ -164,14 +207,26 @@ export interface HudState {
   /** When the (server-reported) bag value last went up, and by how much. */
   bagGainAt: number;
   bagGain: number;
+  /** Weapon slot in hand (includes a predicted, not yet confirmed swap). */
+  activeSlot: number;
+  weaponPhase: WeaponPhase;
+  reload: ReloadView | null;
+  legendary: LegendaryMoment | null;
 }
 
 /** Events for renderer / audio (server events + purely local predictions). */
 export type FxEvent =
   | Extract<GameEvent, { e: 'dmg' } | { e: 'hurt' } | { e: 'extractAlert' } | { e: 'kill' } | { e: 'loot' } | { e: 'announce' } | { e: 'extract' }>
   | Extract<GameEvent, { e: 'kingpin' }>
-  | { e: 'localShot'; weaponId: WeaponId }
-  | { e: 'dryFire' }
+  /** One of our own rounds (predicted instantly; pellets of one shot count once). */
+  | { e: 'localShot'; weaponId: WeaponId; angle: number; streak: number }
+  | { e: 'dryFire'; weaponId: WeaponId }
+  | { e: 'equip'; weaponId: WeaponId }
+  | { e: 'reloadStart'; weaponId: WeaponId; tactical: boolean }
+  | { e: 'shellIn'; weaponId: WeaponId }
+  | { e: 'reloadDone'; weaponId: WeaponId }
+  /** A round passed through a player (piercing weapons). */
+  | { e: 'pierce'; x: number; y: number; dx: number; dy: number }
   | { e: 'dash' };
 
 const DT = 1 / NETWORK_CONFIG.tickRate;
@@ -227,13 +282,25 @@ export class GameClient {
   private prevY = 0;
   private alpha = 1;
   aim = 0;
-  /** Local shot prediction. */
-  private simTime = 0;
-  private nextLocalFireAt = 0;
-  private lastDryFireAt = 0;
+  /** Local shot prediction: the same weapon controller the server runs. */
+  readonly weaponRt = createWeaponRuntime();
+  private readonly spreadsBuf: number[] = [];
+  private readonly anglesBuf: number[] = [];
   private readonly pendingShots = new Map<number, number>();
   private localBulletId = 0;
-  private hurts: { id: number; at: number; angle: number }[] = [];
+  private tracerCount = 0;
+  private readonly remoteTracerCount = new Map<number, number>();
+  private lastAck = 0;
+  /** Swap sent but not yet confirmed by a snapshot. */
+  private predictedSlot: { slot: number; at: number } | null = null;
+  /** Reload started locally (R / empty trigger) before the server confirms it. */
+  private localReload: { at: number; totalMs: number; uid: string } | null = null;
+  /** Input seq whose trigger pull cancelled a reload; server reload state is ignored until acked. */
+  private reloadCancelSeq = 0;
+  private reloadKey = 0;
+  private serverReloadActive = false;
+  private legendary: LegendaryMoment | null = null;
+  private hurts: { id: number; at: number; angle: number; armor: boolean }[] = [];
 
   // Replicated state
   self: SelfState | null = null;
@@ -257,7 +324,7 @@ export class GameClient {
   private notices: Notice[] = [];
   private extractAlertAt = 0;
   private hurtAt = 0;
-  private interactHint: string | null = null;
+  private interactHint: InteractHint | null = null;
   private kingpin: KingpinAlert | null = null;
   private extractInterrupt: ExtractInterrupt | null = null;
   private bagGainAt = 0;
@@ -384,6 +451,12 @@ export class GameClient {
       this.extractInterrupt = null;
       this.hudDirty = true;
     }
+    if (this.legendary && now - this.legendary.at > 3600) {
+      this.legendary = null;
+      this.hudDirty = true;
+    }
+    // Reload progress / swaps move continuously: refresh while they matter.
+    if (this.reloadView() || this.weaponRt.equipLeftMs > 0) this.hudDirty = true;
     if (lens !== this.feed.length + this.announcements.length + this.toasts.length + this.notices.length + this.hurts.length) this.hudDirty = true;
     if (!this.hudDirty) return;
     this.hudDirty = false;
@@ -418,12 +491,16 @@ export class GameClient {
       extractInterrupt: this.extractInterrupt,
       bagGainAt: this.bagGainAt,
       bagGain: this.bagGain,
+      activeSlot: this.activeSlot,
+      weaponPhase: this.currentWeaponPhase(),
+      reload: this.reloadView(),
+      legendary: this.legendary,
     };
   }
 
   /** Server magazine minus shots we predicted but the server has not acknowledged yet. */
   displayMag(): number | null {
-    const w = this.self?.weapons[this.self.activeSlot];
+    const w = this.activeWeapon;
     if (!w) return null;
     let unacked = 0;
     for (const n of this.pendingShots.values()) unacked += n;
@@ -434,6 +511,97 @@ export class GameClient {
 
   queueDash(): void {
     this.dashQueued = true;
+  }
+
+  // ------------------------------------------------------------- weapons
+
+  /** Slot in hand: a swap is shown instantly and confirmed by the server shortly after. */
+  get activeSlot(): number {
+    const s = this.self;
+    if (!s) return 0;
+    const p = this.predictedSlot;
+    if (p) {
+      if (s.activeSlot === p.slot || !s.weapons[p.slot] || performance.now() - p.at > 800) this.predictedSlot = null;
+      else return p.slot;
+    }
+    return s.activeSlot;
+  }
+
+  get activeWeapon(): WeaponInstance | null {
+    return this.self?.weapons[this.activeSlot] ?? null;
+  }
+
+  get activeDef(): WeaponDefinition | null {
+    const w = this.activeWeapon;
+    return w ? WEAPONS[w.weaponId] : null;
+  }
+
+  /** Spread cone (radians, half-angle) the next round flies in: the crosshair shows exactly this. */
+  currentSpread(): number {
+    const def = this.activeDef;
+    return def ? weaponSpread(this.weaponRt, def) + def.pelletSpread : 0;
+  }
+
+  currentWeaponPhase(): WeaponPhase {
+    const s = this.self;
+    const alive = !!s && (s.status === 'ALIVE' || s.status === 'EXTRACTING');
+    return weaponPhase(this.weaponRt, this.activeDef, { dead: !alive, reloading: this.isReloading(), mag: this.displayMag() ?? 0 });
+  }
+
+  switchWeapon(slot: number): void {
+    const s = this.self;
+    const w = s?.weapons[slot];
+    if (!s || !w || slot === this.activeSlot || !this.canPredict) return;
+    this.predictedSlot = { slot, at: performance.now() };
+    this.localReload = null;
+    this.fx.push({ e: 'equip', weaponId: w.weaponId });
+    this.action({ k: 'switch', slot });
+    this.markHud();
+  }
+
+  reload(): void {
+    this.action({ k: 'reload' });
+    this.predictReload(false);
+  }
+
+  private predictReload(auto: boolean): void {
+    const s = this.self;
+    const w = this.activeWeapon;
+    if (!s || !w || !this.canPredict || this.isReloading() || s.useItem) return;
+    const def = WEAPONS[w.weaponId];
+    const mag = this.displayMag() ?? 0;
+    const total = reloadDuration(def, mag, s.ammo[def.ammoType]);
+    if (total <= 0) return;
+    this.localReload = { at: performance.now(), totalMs: total, uid: w.uid };
+    this.reloadKey++;
+    this.fx.push({ e: 'reloadStart', weaponId: def.id, tactical: mag > 0 && !auto });
+    this.markHud();
+  }
+
+  /** Server reload state, unless our trigger pull already cancelled it. */
+  private get serverReloading(): boolean {
+    const s = this.self;
+    return !!s && s.reloadRemainingMs > 0 && this.reloadCancelSeq <= this.lastAck;
+  }
+
+  isReloading(): boolean {
+    if (this.serverReloading) return true;
+    const r = this.localReload;
+    return !!r && performance.now() - r.at < r.totalMs && r.uid === this.activeWeapon?.uid;
+  }
+
+  reloadView(): ReloadView | null {
+    const s = this.self;
+    if (s && this.serverReloading) {
+      const total = Math.max(1, s.reloadTotalMs);
+      return { key: this.reloadKey, progress: 1 - s.reloadRemainingMs / total, remainingMs: s.reloadRemainingMs, totalMs: total };
+    }
+    const r = this.localReload;
+    if (r && this.isReloading()) {
+      const t = performance.now() - r.at;
+      return { key: this.reloadKey, progress: t / r.totalMs, remainingMs: r.totalMs - t, totalMs: r.totalMs };
+    }
+    return null;
   }
 
   action(a: ClientAction): void {
@@ -484,6 +652,7 @@ export class GameClient {
       this.prevY = this.predicted.y;
       if (!this.canPredict) {
         this.dashQueued = false;
+        this.weaponRt.triggerHeld = input.fire;
         continue;
       }
       let b = 0;
@@ -494,10 +663,9 @@ export class GameClient {
       }
       const cmd: InputCmd = { s: ++this.seq, mx: input.mx, my: input.my, a: Math.round(input.aim * 1000) / 1000, b };
       const dashBefore = this.predicted.dashTime;
-      stepMovement(this.predicted, cmd, DT, this.world!);
+      stepMovement(this.predicted, cmd, DT, this.world!, moveParamsFor(this.activeDef));
       if (dashBefore <= 0 && this.predicted.dashTime > 0) this.fx.push({ e: 'dash' });
-      this.simTime += DT_MS;
-      if (input.fire) this.predictShot(cmd);
+      this.stepLocalWeapon(cmd, input.fire);
       this.pending.push(cmd);
       out.push(cmd);
     }
@@ -516,27 +684,50 @@ export class GameClient {
   }
 
   /**
-   * Instant local feedback for our own shots (muzzle flash, recoil, tracer,
-   * ammo counter). Purely visual; the server simulates the real bullets.
+   * Advances the shared weapon controller exactly like the server does for
+   * this input. Rounds it fires get instant local feedback (tracer, muzzle
+   * flash, recoil, ammo counter); the server still simulates the real
+   * bullets and decides every hit.
    */
-  private predictShot(cmd: InputCmd): void {
+  private stepLocalWeapon(cmd: InputCmd, fire: boolean): void {
     const s = this.self;
-    const w = s?.weapons[s.activeSlot];
-    if (!s || !w || s.reloadRemainingMs > 0 || s.useItem || this.simTime < this.nextLocalFireAt) return;
-    const def = WEAPONS[w.weaponId];
-    if ((this.displayMag() ?? 0) <= 0) {
-      if (this.simTime - this.lastDryFireAt > 400) {
-        this.lastDryFireAt = this.simTime;
-        this.fx.push({ e: 'dryFire' });
-      }
+    const rt = this.weaponRt;
+    const w = this.activeWeapon;
+    if (!s || !w) {
+      rt.triggerHeld = fire;
       return;
     }
-    this.nextLocalFireAt = this.simTime + def.fireIntervalMs;
-    this.pendingShots.set(cmd.s, 1);
+    const def = WEAPONS[w.weaponId];
+    if (rt.key !== w.uid) equipWeaponRuntime(rt, w.uid, def);
+    const mag = this.displayMag() ?? 0;
+    let reloading = this.isReloading();
+    // Same rule as the server: a trigger pull with rounds loaded cancels the reload.
+    if (reloading && fire && !rt.triggerHeld && mag > 0) {
+      this.localReload = null;
+      this.reloadCancelSeq = cmd.s;
+      reloading = false;
+    }
+    const canFire = !reloading && !s.useItem && (s.status === 'ALIVE' || s.status === 'EXTRACTING');
+    const n = stepWeapon(rt, def, { trigger: fire, moving: cmd.mx !== 0 || cmd.my !== 0, dashing: this.predicted.dashTime > 0, ammo: mag, canFire }, DT_MS, this.spreadsBuf);
+    if (rt.dry) {
+      this.fx.push({ e: 'dryFire', weaponId: def.id });
+      this.predictReload(true);
+    }
+    if (n === 0) return;
+    this.pendingShots.set(cmd.s, n);
+    for (let i = 0; i < n; i++) {
+      this.predictRound(def, cmd.a, this.spreadsBuf[i]!);
+      this.fx.push({ e: 'localShot', weaponId: def.id, angle: cmd.a, streak: rt.streak });
+    }
+    if (mag - n <= 0) this.predictReload(true);
+    this.markHud();
+  }
+
+  private predictRound(def: WeaponDefinition, aim: number, spread: number): void {
     const x0 = this.predicted.x;
     const y0 = this.predicted.y;
-    for (let i = 0; i < def.pellets; i++) {
-      const angle = cmd.a + (Math.random() * 2 - 1) * def.spread;
+    const tracer = this.tracerCount++ % def.visual.tracerEvery === 0;
+    for (const angle of shotAngles(def, aim, spread, Math.random, this.anglesBuf)) {
       const dx = Math.cos(angle);
       const dy = Math.sin(angle);
       let maxDist = def.range;
@@ -556,7 +747,7 @@ export class GameClient {
         y0,
         dx,
         dy,
-        speed: def.bulletSpeed,
+        speed: def.projectileSpeed,
         maxDist,
         weapon: weaponIndex(def.id),
         ownerId: this.playerId ?? -1,
@@ -566,10 +757,9 @@ export class GameClient {
         local: true,
         ghost: false,
         surface: hitPlayer ? null : (wall?.obstacle.style ?? null),
+        tracer,
       });
     }
-    this.fx.push({ e: 'localShot', weaponId: def.id });
-    this.markHud();
   }
 
   private interpolateRemotes(): void {
@@ -604,7 +794,7 @@ export class GameClient {
   }
 
   private updateInteractHint(): void {
-    let hint: string | null = null;
+    let hint: InteractHint | null = null;
     if (this.canPredict) {
       const r2 = PLAYER_CONFIG.interactRange ** 2;
       let best = Infinity;
@@ -614,8 +804,7 @@ export class GameClient {
         const d = (it.x - px) ** 2 + (it.y - py) ** 2;
         if (d < r2 && d < best) {
           best = d;
-          const def = getItemDef(it.itemId);
-          hint = `Pick up ${def.name}${it.qty > 1 ? ` ×${it.qty}` : ''}`;
+          hint = { kind: 'item', id: it.id, itemId: it.itemId, qty: it.qty, mag: it.mag ?? null };
         }
       }
       for (const c of this.crates.values()) {
@@ -623,12 +812,16 @@ export class GameClient {
         const d = (c.x - px) ** 2 + (c.y - py) ** 2;
         if (d < r2 && d < best) {
           best = d;
-          const label = c.type === 'SUPPLY_DROP' ? 'Supply Drop' : `${c.type.charAt(0)}${c.type.slice(1).toLowerCase()} Crate`;
-          hint = c.locked ? `${label} · locked until Combat Phase` : `Open ${label}`;
+          const label = c.type === 'SUPPLY_DROP' ? 'Supply Drop' : c.type.charAt(0) + c.type.slice(1).toLowerCase() + ' Crate';
+          hint = { kind: 'crate', id: c.id, label, locked: c.locked };
         }
       }
     }
-    if (hint !== this.interactHint) {
+    const prev = this.interactHint;
+    const same =
+      prev === hint ||
+      (!!prev && !!hint && prev.kind === hint.kind && prev.id === hint.id && (prev.kind !== 'item' || (hint.kind === 'item' && prev.qty === hint.qty && prev.mag === hint.mag)));
+    if (!same) {
       this.interactHint = hint;
       this.markHud();
     }
@@ -709,6 +902,8 @@ export class GameClient {
       this.bullets.length = 0;
       this.pending = [];
       this.pendingShots.clear();
+      this.predictedSlot = null;
+      this.localReload = null;
       this.predictionReady = false;
     }
     if (msg.phase === 'WAITING' || msg.phase === 'STARTING') this.setStatus('lobby');
@@ -769,7 +964,9 @@ export class GameClient {
       this.bagGainAt = performance.now();
       this.bagGain = self.bagValue - prevBag;
     }
+    this.trackWeaponEvents(this.self, self);
     this.self = self;
+    this.lastAck = ack;
     for (const seq of this.pendingShots.keys()) if (seq <= ack) this.pendingShots.delete(seq);
     if (!this.world) return;
     if (!this.predictionReady) {
@@ -799,7 +996,8 @@ export class GameClient {
       dashDirX: self.dashDirX,
       dashDirY: self.dashDirY,
     };
-    for (const cmd of this.pending) stepMovement(corrected, cmd, DT, this.world);
+    const params = moveParamsFor(this.activeDef);
+    for (const cmd of this.pending) stepMovement(corrected, cmd, DT, this.world, params);
     const ex = this.predicted.x - corrected.x;
     const ey = this.predicted.y - corrected.y;
     if (ex * ex + ey * ey > 160 * 160) {
@@ -816,6 +1014,29 @@ export class GameClient {
       this.prevY -= ey;
     }
     Object.assign(this.predicted, corrected);
+  }
+
+  /** Reload sounds / events from authoritative state changes (shell inserts, completion). */
+  private trackWeaponEvents(prev: SelfState | null, next: SelfState): void {
+    const w = next.weapons[next.activeSlot];
+    const was = prev?.weapons[prev.activeSlot];
+    const reloading = next.reloadRemainingMs > 0;
+    if (reloading && !this.serverReloadActive) {
+      // Server started a reload we did not predict (e.g. auto reload): announce it.
+      if (!this.localReload && w) {
+        this.reloadKey++;
+        this.fx.push({ e: 'reloadStart', weaponId: w.weaponId, tactical: w.mag > 0 });
+      }
+      this.localReload = null;
+    }
+    if (w && was && w.uid === was.uid && w.mag > was.mag && prev && prev.reloadRemainingMs > 0) {
+      const def = WEAPONS[w.weaponId];
+      if (def.reloadStyle === 'SHELL') this.fx.push({ e: 'shellIn', weaponId: w.weaponId });
+      if (!reloading) this.fx.push({ e: 'reloadDone', weaponId: w.weaponId });
+    }
+    this.serverReloadActive = reloading;
+    // A predicted reload the server never confirmed (rejected / raced): drop it.
+    if (this.localReload && !reloading && performance.now() - this.localReload.at > 450 + this.ping) this.localReload = null;
   }
 
   private upsertPlayer(d: PlayerNet, t: number, name?: string, bot?: boolean): void {
@@ -850,16 +1071,28 @@ export class GameClient {
     // Our own shots are already shown via prediction; keep the server copy invisible
     // so hit confirmations (bullet end events) still line up.
     const ghost = ownerId === this.playerId;
-    this.bullets.push({ id, x0: x, y0: y, dx, dy, speed, maxDist, weapon, ownerId, born: performance.now(), endDist: null, hitPlayer: false, local: false, ghost, surface: hit?.obstacle.style ?? null });
+    const def = weaponFromIndex(weapon) ?? WEAPONS.basic_pistol;
+    let tracer = true;
+    if (!ghost && def.visual.tracerEvery > 1) {
+      const k = (this.remoteTracerCount.get(ownerId) ?? 0) + 1;
+      this.remoteTracerCount.set(ownerId, k);
+      tracer = k % def.visual.tracerEvery === 0;
+    }
+    this.bullets.push({ id, x0: x, y0: y, dx, dy, speed, maxDist, weapon, ownerId, born: performance.now(), endDist: null, hitPlayer: false, local: false, ghost, surface: hit?.obstacle.style ?? null, tracer });
     if (this.bullets.length > 500) this.bullets.splice(0, this.bullets.length - 500);
   }
 
   private endBullet(e: BulletEnd): void {
-    const [id, x, y, hitPlayer] = e;
+    const [id, x, y, hit] = e;
     const b = this.bullets.find((bb) => bb.id === id);
     if (!b) return;
+    if (hit === 2) {
+      // Pierced a player and kept flying.
+      this.fx.push({ e: 'pierce', x, y, dx: b.dx, dy: b.dy });
+      return;
+    }
     b.endDist = Math.hypot(x - b.x0, y - b.y0);
-    b.hitPlayer = hitPlayer === 1;
+    b.hitPlayer = hit === 1;
   }
 
   private onEvent(ev: GameEvent): void {
@@ -891,6 +1124,7 @@ export class GameClient {
         break;
       case 'loot':
         this.toasts = [...this.toasts.slice(-2), { id: this.uid++, at: now, itemId: ev.itemId, qty: ev.qty, rarity: ev.rarity, value: ev.value }];
+        if (RARITY_CONFIG[ev.rarity].rank >= RARITY_CONFIG.LEGENDARY.rank) this.legendary = { id: this.uid++, at: now, itemId: ev.itemId, value: ev.value };
         this.fx.push(ev);
         break;
       case 'notice':
@@ -915,7 +1149,7 @@ export class GameClient {
         break;
       case 'hurt':
         this.hurtAt = now;
-        this.hurts = [...this.hurts.slice(-3), { id: this.uid++, at: now, angle: ev.angle }];
+        this.hurts = [...this.hurts.slice(-3), { id: this.uid++, at: now, angle: ev.angle, armor: ev.armor ?? false }];
         this.fx.push(ev);
         break;
       case 'dmg':

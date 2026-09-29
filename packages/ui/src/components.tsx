@@ -153,6 +153,62 @@ const ICON_GLYPH: Record<string, ReactNode> = {
       <rect x="12.5" y="13.3" width="5.5" height="2.6" rx="0.8" />
     </>
   ),
+  pistol_heavy: (
+    <>
+      <path d="M2.5 8h16.2l1 1.1H22v3.5h-7.4l-1 2.2h-3.2l-1.3 5.2H6.2l1.3-5.2H2.5z" />
+      <path fill={INK} opacity="0.45" d="M12 8.9h1.2v1H12zM14.2 8.9h1.2v1h-1.2zM16.4 8.9h1.2v1h-1.2z" />
+    </>
+  ),
+  smg_sd: (
+    <>
+      <path d="M1 10.3h3.3l1-1.1h8.6v.9H23v2.8h-9.1v.9h-3.7l-1.2 4.9H6.1l1.2-4.9H4.9l-1 1H1z" />
+      <rect x="10.4" y="13.6" width="2.3" height="5" rx="0.6" />
+    </>
+  ),
+  rifle_burst: (
+    <>
+      <path d="M1.5 9.6h12.8l1-1.2h3.6l1 1.2H23v2.4h-3.3l-1 1h-4.2l-.6 1.1h-3.4l-1.1 4.5H7.3l1.1-4.5H1.5z" />
+      <rect x="3.2" y="13" width="2.9" height="5.2" rx="0.7" />
+      <rect x="11.2" y="7" width="7" height="1.6" rx="0.6" />
+    </>
+  ),
+  rifle_battle: (
+    <>
+      <path d="M1 10.2h3l1-1.4h11.4l1 1.4H20v.8h3v2.4h-3v.3h-4.2l-1.3 1.1h-3l-1.1 5H8.3l1.1-5H5.8l-1.2 1.4H1z" />
+      <rect x="12.3" y="14.2" width="3" height="5.4" rx="0.5" />
+      <rect x="7.5" y="6.6" width="5.6" height="1.9" rx="0.9" />
+    </>
+  ),
+  shotgun_auto: (
+    <>
+      <path d="M1.5 10.2H21v2.6h-8.5v1.2H9.4l-1.2 4.6H5.1l1.2-4.6h-4.8z" />
+      <circle cx="11" cy="15.6" r="3.3" />
+      <circle fill={INK} opacity="0.4" cx="11" cy="15.6" r="1.3" />
+    </>
+  ),
+  sniper: (
+    <>
+      <path d="M1 11.5h3.8l1-1h8.6l.6.6H23v1.5h-7.4l-1 1h-3.3l-1 4.5H7.5l1-4.5H5.1l-1.3 1.4H1z" />
+      <rect x="6.4" y="7" width="8.2" height="2.5" rx="1.25" />
+      <path d="M9.4 9.4h1.4v1.3H9.4z" />
+      <path d="M17 12.9l1.6 5 1-.3-1.3-4.7z" />
+    </>
+  ),
+  lmg: (
+    <>
+      <path d="M1 10h3l1-1.7h12.4l1 1.7h3.3v1H23v2H21.7v.5H17v1.2h-3.2l-1 4.3H9.6l1-4.3H5.6l-1.2 1.6H1z" />
+      <rect x="10.6" y="14.2" width="4.9" height="4.4" rx="0.6" />
+      <path d="M18.5 13.6l2 5.2 1-.4-1.8-4.8z" />
+    </>
+  ),
+  void_rifle: (
+    <>
+      <path d="M1.5 10.4l2.5-1.8h13l1.4 1.2H23v2.6h-5.6l-1.4 1.2h-4.4l-1.3 4.8H7.2l1.3-4.8H4z" />
+      <circle cx="18.2" cy="11.1" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.1" />
+      <circle cx="21" cy="11.1" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.1" />
+      <rect fill={INK} opacity="0.35" x="7" y="9.4" width="7" height="1" rx="0.5" />
+    </>
+  ),
   ammo_light: (
     <>
       <path d="M6 19v-7.5a2 2 0 014 0V19z" />
@@ -172,6 +228,13 @@ const ICON_GLYPH: Record<string, ReactNode> = {
       <rect x="4.5" y="7" width="4.4" height="12" rx="1.2" />
       <rect x="9.8" y="7" width="4.4" height="12" rx="1.2" />
       <rect x="15.1" y="7" width="4.4" height="12" rx="1.2" />
+    </>
+  ),
+  ammo_heavy: (
+    <>
+      <path d="M4.5 20V9.2a2.4 2.4 0 012.4-3.4 2.4 2.4 0 012.4 3.4V20z" />
+      <path d="M10.3 20V7.6a2.4 2.4 0 012.4-3.4 2.4 2.4 0 012.4 3.4V20z" />
+      <path d="M16.1 20V9.2a2.4 2.4 0 012.4-3.4 2.4 2.4 0 012.4 3.4V20z" />
     </>
   ),
   medkit: (

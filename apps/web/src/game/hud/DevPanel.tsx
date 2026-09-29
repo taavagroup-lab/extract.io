@@ -1,7 +1,18 @@
-import { ITEM_DEFINITIONS, MATCH_CONFIG } from '@extract/game-config';
+import { ITEM_DEFINITIONS, MATCH_CONFIG, WEAPONS } from '@extract/game-config';
+import { WEAPON_IDS } from '@extract/game-types';
 import { Button } from '@extract/ui';
 import { useState } from 'react';
+import { weaponDebugFlags, type WeaponDebugFlags } from '../../lib/devFlags';
+import { useStore } from '../../lib/store';
 import type { GameClient } from '../net/GameClient';
+
+const DEBUG_LABELS: Record<keyof WeaponDebugFlags, string> = {
+  hitboxes: 'Hitboxes',
+  paths: 'Projectile paths',
+  spread: 'Spread cone',
+  muzzle: 'Muzzle point',
+  stats: 'Weapon stats',
+};
 
 /** DEV ONLY. The server ignores these commands unless DEV_TOOLS is enabled (never in production). */
 export function DevPanel({ client, onClose }: { client: GameClient; onClose: () => void }) {
@@ -11,6 +22,8 @@ export function DevPanel({ client, onClose }: { client: GameClient; onClose: () 
   const [dmg, setDmg] = useState(25);
   const [tx, setTx] = useState(2000);
   const [ty, setTy] = useState(2000);
+  const [infinite, setInfinite] = useState(false);
+  const flags = useStore(weaponDebugFlags);
 
   const jump = (ms: number) => client.dev({ cmd: 'setMatchTime', ms });
 
@@ -36,6 +49,35 @@ export function DevPanel({ client, onClose }: { client: GameClient; onClose: () 
           <Button size="sm" onClick={() => client.dev({ cmd: 'spawnItem', itemId, qty })}>
             Spawn
           </Button>
+        </div>
+      </section>
+      <section>
+        <label>Weapons</label>
+        <div className="dev-row dev-row--wrap dev-weapons">
+          {WEAPON_IDS.map((id) => (
+            <Button key={id} size="sm" variant="ghost" onClick={() => client.dev({ cmd: 'giveWeapon', weaponId: id })}>
+              {WEAPONS[id].name}
+            </Button>
+          ))}
+        </div>
+        <div className="dev-row dev-row--wrap dev-toggles">
+          <label className="dev-check">
+            <input
+              type="checkbox"
+              checked={infinite}
+              onChange={(e) => {
+                setInfinite(e.target.checked);
+                client.dev({ cmd: 'infiniteAmmo', on: e.target.checked });
+              }}
+            />
+            Infinite ammo
+          </label>
+          {(Object.keys(DEBUG_LABELS) as (keyof WeaponDebugFlags)[]).map((k) => (
+            <label key={k} className="dev-check">
+              <input type="checkbox" checked={flags[k]} onChange={(e) => weaponDebugFlags.set({ ...flags, [k]: e.target.checked })} />
+              {DEBUG_LABELS[k]}
+            </label>
+          ))}
         </div>
       </section>
       <section>

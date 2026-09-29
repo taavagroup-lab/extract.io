@@ -57,7 +57,8 @@ describe('milestone: two players, loot, kill, extraction, persistence', () => {
     for (let i = 0; i < 120 && p2.status !== 'DEAD'; i++) {
       room.handleInputs(p1, [{ s: ++seq, mx: 0, my: 0, a: 0, b: FIRE }]);
       room.tick();
-      if (i === 10) expect(p2.hp).toBeLessThan(hpBefore);
+      // The rifle needs its raise time (equipMs) before the first round.
+      if (i === 25) expect(p2.hp).toBeLessThan(hpBefore);
     }
     expect(p2.status).toBe('DEAD');
     expect(p1.kills).toBe(1);
@@ -196,10 +197,17 @@ describe('anti-cheat', () => {
       room.handleInputs(p1, [{ s: ++seq, mx: 0, my: 0, a: 0, b: FIRE }]);
       room.tick();
     }
-    const fired = pistol.magazineSize - p1.inventory.activeWeapon()!.mag;
-    expect(fired).toBeLessThanOrEqual(Math.ceil(1000 / pistol.fireIntervalMs) + 1);
+    // Semi-auto: holding the trigger fires exactly one round.
+    expect(pistol.magazineSize - p1.inventory.activeWeapon()!.mag).toBe(1);
+    // Mashing the trigger every tick is still capped by the fire rate.
+    const before = p1.inventory.activeWeapon()!.mag;
+    for (let i = 0; i < 30; i++) {
+      room.handleInputs(p1, [{ s: ++seq, mx: 0, my: 0, a: 0, b: i % 2 === 0 ? FIRE : 0 }]);
+      room.tick();
+    }
+    expect(before - p1.inventory.activeWeapon()!.mag).toBeLessThanOrEqual(Math.ceil(1000 / pistol.fireIntervalMs) + 1);
     for (let i = 0; i < 300; i++) {
-      room.handleInputs(p1, [{ s: ++seq, mx: 0, my: 0, a: 0, b: FIRE }]);
+      room.handleInputs(p1, [{ s: ++seq, mx: 0, my: 0, a: 0, b: i % 2 === 0 ? FIRE : 0 }]);
       room.tick();
     }
     expect(p1.inventory.activeWeapon()!.mag).toBe(0); // no reserve -> no infinite ammo

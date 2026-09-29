@@ -45,7 +45,7 @@ interface Unit {
   weapon?: DroppedWeapon;
 }
 
-const AMMO_ITEM: Record<keyof AmmoReserves, ItemId> = { light: 'ammo_light', rifle: 'ammo_rifle', shell: 'ammo_shell' };
+const AMMO_ITEM: Record<keyof AmmoReserves, ItemId> = { light: 'ammo_light', rifle: 'ammo_rifle', shell: 'ammo_shell', heavy: 'ammo_heavy' };
 
 function merge(units: { itemId: ItemId }[]): ItemAmount[] {
   const m = new Map<ItemId, number>();
