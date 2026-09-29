@@ -124,6 +124,8 @@ export class CharacterModel {
   private deathT = -1;
   private deathSide = 1;
   private groundGlowT = 0;
+  /** Deploy animation (drop in + settle), 1 = done. */
+  private spawnT = 1;
   /** Smoothed ground speed (units/s), derived from rendered movement. */
   speed = 0;
 
@@ -323,6 +325,11 @@ export class CharacterModel {
     if (this.gun?.action) this.actionT = 0;
   }
 
+  /** Deploy: the operator drops in and settles (match start). */
+  spawnIn(): void {
+    this.spawnT = 0;
+  }
+
   /** A shotgun shell went in (small bounce of the gun). */
   shellIn(): void {
     this.shellBump = 1;
@@ -380,7 +387,14 @@ export class CharacterModel {
    * local player; remote players estimate it from the RELOADING flag.
    */
   update(x: number, y: number, rot: number, flags: number, dt: number, time: number, reloadProgress: number | null = null): void {
-    this.root.position.set(x, 0, y);
+    let drop = 0;
+    if (this.spawnT < 1) {
+      this.spawnT = Math.min(1, this.spawnT + dt / 0.45);
+      const e = 1 - Math.pow(1 - this.spawnT, 3);
+      drop = (1 - e) * 34;
+      this.body.scale.setScalar(MODEL_SCALE * (0.75 + 0.25 * e));
+    }
+    this.root.position.set(x, drop, y);
     this.body.rotation.y = -rot;
 
     // Walk cycle from actual displacement (works for predicted and interpolated movement).

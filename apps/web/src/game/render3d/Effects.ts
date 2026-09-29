@@ -330,6 +330,18 @@ export class Effects {
     }
   }
 
+  /** Deploy at match start: a ring of light and a dust kick where the operator lands. */
+  spawnIn(x: number, z: number, color: number): void {
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      this.glowPool.spawn({ x, y: 4, z, vx: Math.cos(a) * 190, vy: 6, vz: Math.sin(a) * 190, drag: 4, color, intensity: 2.6, size: 4, endSize: 1, life: 420 });
+    }
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * Math.PI * 2;
+      this.smokePool.spawn({ x, y: 4, z, vx: Math.cos(a) * 70, vy: 12, vz: Math.sin(a) * 70, drag: 2.2, color: 0x8a8377, alpha: 0.35, size: 12, endSize: 36, life: 700 });
+    }
+  }
+
   /** Crate lid opening: dust + a flash in the container's colour. */
   crateOpen(x: number, z: number, color: number | null, big: boolean): void {
     for (let i = 0; i < (big ? 8 : 5); i++) {

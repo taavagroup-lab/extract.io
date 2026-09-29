@@ -149,8 +149,11 @@ describe.skipIf(!hasDb)('API integration (PostgreSQL)', () => {
     expect(profile.stats.totalExtractions).toBe(1);
     expect(profile.stats.totalKills).toBe(3);
 
-    const lb = (await app.inject({ method: 'GET', url: '/leaderboard?category=MOST_EXTRACTIONS&period=WEEKLY' })).json();
-    expect(lb.rows.some((r: { userId: string }) => r.userId === a.user.id)).toBe(true);
+    // The shared test DB accumulates tied players across runs, so check our own rank row
+    // (independent of which page we land on) instead of page 1.
+    const lb = (await app.inject({ method: 'GET', url: '/leaderboard?category=MOST_EXTRACTIONS&period=WEEKLY', headers: authed(a) })).json();
+    expect(lb.me?.userId).toBe(a.user.id);
+    expect(lb.me?.value).toBeGreaterThanOrEqual(1);
   });
 
   it('marketplace purchase: escrow, 5 % fee, balances and ownership transfer', async () => {

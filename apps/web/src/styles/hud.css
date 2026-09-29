@@ -152,7 +152,7 @@
 .hud-weapon__main { display: flex; align-items: center; gap: 10px; animation: weapon-swap 260ms ease-out; }
 @keyframes weapon-swap { from { opacity: 0; transform: translateY(6px); } }
 .hud-weapon__id { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.1; }
-.hud-weapon__name { font-size: 15px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud-weapon__name { font-size: clamp(13px, 1.1vw, 15px); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-weapon__meta { font-family: var(--font-body); font-size: 10px; letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; }
 .hud-weapon__meta b { color: var(--text); font-weight: 600; }
 .hud-weapon__ammo { font-family: var(--font-mono); white-space: nowrap; }
@@ -216,7 +216,8 @@
 }
 @media (max-width: 900px) {
   .hud-bottom { left: var(--hud-pad); transform: none; flex-direction: column; align-items: stretch; }
-  .hud-vitals, .hud-weapon { width: 230px; min-width: 0; }
+  .hud-vitals { width: 230px; min-width: 0; }
+  .hud-weapon { width: 266px; min-width: 0; }
   .hud-top-center { top: 170px; width: 90vw; }
   .minimap canvas { width: 120px; height: 120px; }
   .hud-top-right { width: 44vw; }

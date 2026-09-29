@@ -430,6 +430,8 @@ export class GameRenderer {
     if (!this.self) {
       this.self = new CharacterModel(skinFor(c.playerName), true);
       this.scene.add(this.self.root);
+      this.self.spawnIn();
+      this.effects.spawnIn(c.renderX, c.renderY, this.self.skin.visor);
     }
     const alive = s.status === 'ALIVE' || s.status === 'EXTRACTING';
     this.self.root.visible = alive && c.status === 'playing';

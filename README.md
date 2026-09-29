@@ -134,18 +134,20 @@ pnpm dev:api
 | Taste | Aktion |
 |---|---|
 | **WASD** | Bewegen |
-| **Maus** / **Linksklick** | Zielen / Schießen |
-| **R** | Nachladen |
+| **Maus** / **Linksklick** | Zielen / Schießen (Semi-Waffen: pro Klick ein Schuss, Burst: ein Feuerstoß) |
+| **R** | Nachladen (erneutes Schießen mit Restmunition bricht den Reload ab) |
 | **E** | Looten / Kiste öffnen |
 | **Space** | Dash |
-| **1 / 2 / 3** | Waffenslots |
+| **1 / 2 / 3**, **Mausrad**, **Q** | Waffenslots / nächste Waffe |
 | **Tab** | Inventar (Secure-Slot, Drop, Use) |
 | **M** | Karte |
 | **H / G** | Medkit / Armor Plate benutzen |
 | **Esc** | Menü: Grafikqualität (Auto/Low/Medium/High/Ultra), FPS-Anzeige, Lautstärke, Match verlassen |
 | **`** oder **F2** | Dev-Panel (nur Dev) |
 
-**Spielgefühl:** Schüsse werden lokal vorhergesagt (Mündungsblitz, Rückstoß, Leuchtspur und Munition reagieren sofort; Treffer entscheidet der Server), Fadenkreuz mit Hitmarker/Kill-Marker, Treffer-Richtungsanzeige, Low-HP-Puls, prozeduraler Sound (Waffen, Treffer, Pickups nach Rarity, Extraction-Countdown, Herzschlag) – alles ohne Asset-Dateien. „Auto“-Grafik passt Auflösung, Bloom und Schatten an die Framerate an.
+**Waffen:** 12 Waffen mit eigener Silhouette, Feuerrate, Streuung, Rückstoß, Magazin, Reload und Sound – von der Start-Pistole *Scout-9* über *Viper-9* (SMG), *Havoc AR*, *Raven MK2* (Burst), *Breaker-12* (Pump-Shotgun) und *Longshot* (Sniper) bis zur legendären *Void Rifle*. Balance-Werte und Rollen: `packages/game-config/src/weapons.ts`, Details in `ARCHITECTURE.md` („Waffensystem 2.0“).
+
+**Spielgefühl:** Schüsse werden lokal vorhergesagt (Mündungsblitz, Kick, Kamera-Impuls, Leuchtspur, Hülsen und Munition reagieren sofort; Treffer entscheidet der Server), Fadenkreuz zeigt den echten Streukegel mit Hit-/Rüstungs-/Kill-Marker und Reload-Ring, Treffer-Richtungsanzeige, Low-HP-Puls, prozeduraler Sound (Waffen, Treffer, Pickups nach Rarity, Extraction-Countdown, Herzschlag) – alles ohne Asset-Dateien. „Auto“-Grafik passt Auflösung, Bloom und Schatten an die Framerate an.
 
 Ablauf: Loot-Phase (0–2 min) → Combat-Phase (2–7 min, *The Vault* öffnet) → Extraction-Phase (7–10 min, 3 Extraction-Punkte aktiv, 10 s in der Zone bleiben). Wer bei 10:00 nicht extrahiert ist, behält nur den Secure-Slot.
 
@@ -183,7 +185,7 @@ Oder im Spiel über das Dev-Panel. Bots laufen, looten, reagieren auf Gegner, sc
 
 ## Dev Tools (nur Development)
 
-Dev-Panel im Spiel: Spawn Item, Spawn Bots, Damage (self / nächster Spieler), Teleport (inkl. zu aktiven Zonen), Activate Extraction, Set Match Time, Give Legendary, Heal, End Match.
+Dev-Panel im Spiel: Spawn Item, **Waffen direkt ausrüsten**, **Infinite Ammo**, Debug-Overlays (Hitboxen, Projektilpfade, Streukegel, Mündungspunkt, Waffen-Stats), Spawn Bots, Damage (self / nächster Spieler), Teleport (inkl. zu aktiven Zonen), Activate Extraction, Set Match Time, Give Legendary, Heal, End Match. In der Browser-Konsole (Dev): `__extractRenderer.aimAt(x, y)`, `.fire(true|false)`, `.sceneStats()`, `.setLevel('high')`.
 HTTP: `POST /dev/spawn-bots?count=N`, `GET /dev/rooms`. Alles serverseitig nur aktiv, wenn `DEV_TOOLS=true` **und** `NODE_ENV!=production`.
 
 ## Reset Database
@@ -200,7 +202,7 @@ pnpm test             # alle Pakete
 pnpm typecheck        # strict TypeScript über alle Pakete
 ```
 
-Abgedeckt u. a.: Loot-Generierung (Verteilung, Limited Supply), Schadensberechnung + Rüstung, Player Death (70/30-Split, Secure Slot, Item-Erhaltung), Inventar, Extraction (Abbruch bei Schaden/Verlassen/Disconnect), Reconnect, Anti-Cheat (Speedhack, Replay, Feuerrate/Munition, Pickup-Distanz, Dev-Tools in Prod), Bounty, Persistenz-Retries, ein komplettes 2-Spieler-Szenario (Waffe → Kill → Loot → Extraction → Persistenz), Bot-Match mit 20 Spielern, Marketplace (Kauf, 5 %-Gebühr, Idempotenz, parallele Doppelkäufe, Balance-Rollback, Ownership, Doppel-Listing, Cancel), Wallet/Mint, Auth.
+Abgedeckt u. a.: Waffen-Controller (Kadenz, Semi/Burst/Auto, Trigger-Puffer, Bloom, Raise-Zeit, Pellet-Muster), Waffen-Balance (TTK-Band, kein One-Shot außer Pump-Shotgun aus nächster Nähe), Kampf (Burst, Shell-Reload + Abbruch, Tactical Reload, Pierce, Rüstungsdurchschlag, Waffenwechsel, Bot-Waffenwahl), Loot-Generierung (Verteilung, Limited Supply), Schadensberechnung + Rüstung, Player Death (70/30-Split, Secure Slot, Item-Erhaltung), Inventar, Extraction (Abbruch bei Schaden/Verlassen/Disconnect), Reconnect, Anti-Cheat (Speedhack, Replay, Feuerrate/Munition, Pickup-Distanz, Dev-Tools in Prod), Bounty, Persistenz-Retries, ein komplettes 2-Spieler-Szenario (Waffe → Kill → Loot → Extraction → Persistenz), Bot-Match mit 20 Spielern, Marketplace (Kauf, 5 %-Gebühr, Idempotenz, parallele Doppelkäufe, Balance-Rollback, Ownership, Doppel-Listing, Cancel), Wallet/Mint, Auth.
 
 Die API-Integrationstests laufen gegen PostgreSQL in einem **eigenen Schema** (`extract_test`, wird automatisch migriert/geseedet) und berühren deine Dev-Daten nicht. Ohne erreichbare DB werden sie übersprungen.
 
